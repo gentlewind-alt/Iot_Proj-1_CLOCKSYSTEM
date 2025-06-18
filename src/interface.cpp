@@ -3,19 +3,24 @@
 extern int selectedTimeZoneIndex;
 extern Adafruit_SSD1306 display;
 extern RTC_DS1307 rtc;
-
-
 // Add this extern so main.cpp and interface.cpp share the same variable
 bool menuSelecting = false;
 int currentMenu = MENU_CLOCK; // Default to clock
 static int selectedMenuIndex = MENU_CLOCK;
+static int lastMenu = -1; // Track the last menu for submenu logic
 
 // === Global Variables ===
 static unsigned long lastActionTime = 0;
+bool running = false;
 static bool editingAlarm = false;
 static bool editingMinute = false;
 static unsigned long lastRtcRead = 0;
 static DateTime now;
+bool choice = false;
+volatile int counter = 0; // Rotary encoder counter
+unsigned long menuEntryTime = 0; // Add near the top, outside any function
+static unsigned long lastRotaryActionTime = 0;
+const unsigned long rotaryDebounceDelay = 150; // ms, adjust as needed
 
 //int currentEmoji = 0;  // <<< Moved here for proper scoping if not global in emoji.cpp
 
@@ -36,64 +41,133 @@ const char* getMenuName(int index) {
     case MENU_CLOCK: return "Clock";
     case MENU_ALARM: return "Alarm";
     case MENU_SET_REGION: return "Weather Region";
+    case MENU_STOPWATCH: return "Stopwatch";
     case MENU_SET_TIMEZONE: return "Timezone";
     default: return "Unknown";
   }
 }
 
+// === Input Handling ===
+volatile unsigned long lastEncoderTime = 0;
+const unsigned long encoderDebounce = 2; // ms
+
+void IRAM_ATTR handleEncoderInput() {
+    unsigned long now = millis();
+    if (now - lastEncoderTime > encoderDebounce) {
+        int dtValue = digitalRead(pinDT);
+        if (dtValue == HIGH) {
+            counter++;
+        } else {
+            counter--;
+        }
+        lastEncoderTime = now;
+    }
+}
+
+int getCounter() {
+    int result;
+    noInterrupts();
+    result = counter;
+    interrupts();
+    return result;
+}
+
+InputState readUserInput() {
+    static int lastCounter = 0;
+    int rotaryDirection = 0; 
+    int currentCounter = getCounter();
+    if (currentCounter != lastCounter) {
+        if (currentCounter > lastCounter) {
+            rotaryDirection = 1; // Clockwise action
+        } else {
+            rotaryDirection = -1; // Counter-clockwise action
+        }
+        lastCounter = currentCounter;
+    }
+
+    int swPressed = (digitalRead(pinSW) == LOW);
+    int rstPressed = (digitalRead(pinRST) == LOW); // or your RST pin
+
+    InputState state = {rotaryDirection, swPressed, rstPressed};
+    return state;
+}
+
 // === Main Menu Loop ===
 void interfaceLoop() {
-    if (menuSelecting) {
-        display.clearDisplay();
-        displayText(0, 0, "Select Menu:");
+    static int lastSwPinState = HIGH;
+    int swPinState = digitalRead(pinSW);
 
-        for (int i = 0; i < MENU_COUNT; ++i) {
+    if (swPinState == LOW && lastSwPinState == HIGH && !menuSelecting && currentMenu == MENU_CLOCK) {
+        menuSelecting = true;
+        lastSwPinState = swPinState;
+        delay(100); // Debounce
+        return;
+    }
+    lastSwPinState = swPinState;
+
+    if (menuSelecting) {
+        menuEntryTime = millis();
+        display.clearDisplay();
+        displayText(0, 0, "Menu:");
+
+        for (int i = 0; i < MENU_COUNT_CONST; ++i) {
             std::string line = (i == selectedMenuIndex ? "> " : "  ");
             line += getMenuName(i);
             displayText(0, 12 + i * 10, line.c_str());
         }
 
-        int input = getUserInput();  // 1=OK, 2=Down, 3=Up,  // 4=Prev
+        InputState input = readUserInput();  // 1=OK, 2=Down, 3=Up,
 
-        if (millis() - lastActionTime > 200) {
-            if (input == 1) {  // OK
+        if (millis() - lastActionTime > 0) {
+            static bool lastSwPressed = false;
+            static bool lastRstPressed = false;
+
+            if (input.swPressed && !lastSwPressed) {  // OK (edge detection)
                 currentMenu = selectedMenuIndex;
                 menuSelecting = false;
-            } else if (input == 2) {  // Down
-                selectedMenuIndex = (selectedMenuIndex + 1) % MENU_COUNT;
-            } else if (input == 3) {  // Up
-                selectedMenuIndex = (selectedMenuIndex - 1 + MENU_COUNT) % MENU_COUNT;
-            } else if (input == 4) {  // Prev button pressed
-                // Go back to default clock screen
-                menuSelecting = false;
-                currentMenu = MENU_CLOCK;
+            }
+            lastSwPressed = input.swPressed;
+
+            if (input.rstPressed && !lastRstPressed) { // RST (edge detection)
+                menuSelecting = !menuSelecting;
+                counter = 0;
+                delay(100); // Debounce
+                return;
+            }
+            lastRstPressed = input.rstPressed;
+
+            // Rotary debounce as before
+            if ((input.rotaryDirection == 1 || input.rotaryDirection == -1) &&
+                (millis() - lastRotaryActionTime > rotaryDebounceDelay)) {
+                if (input.rotaryDirection == 1) {
+                    selectedMenuIndex = (selectedMenuIndex + 1) % MENU_COUNT;
+                } else if (input.rotaryDirection == -1) {
+                    selectedMenuIndex = (selectedMenuIndex - 1 + MENU_COUNT) % MENU_COUNT;
+                }
+                lastRotaryActionTime = millis();
             }
             lastActionTime = millis();
         }
-
         display.display();
         return;  // skip rest of loop while selecting
     }
 
     // --- RST_PIN handling: Go back to menu if pressed ---
-    int input = getUserInput();
-    if (input == 6) { // RST_PIN must be defined and pinMode set in main.cpp
-        menuSelecting = true;
-        delay(300); // Debounce
-        return;
-    }
+    InputState input = readUserInput();
+        if (input.rstPressed) { // RST_PIN must be defined and pinMode set in main.cpp
+            menuSelecting = !menuSelecting; // Toggle menuSelecting state
+            counter = 0;
+            delay(100); // Debounce
+            return;
+        }
 
     display.clearDisplay();
     DateTime nowIST = rtc.now();
     const TimeZone& tz = timeZones[selectedTimeZoneIndex];
 
-    if (millis() - lastRtcRead > 500) {
-        now = rtc.now();
-        lastRtcRead = millis();
-    }
-
     switch (currentMenu) {
         case MENU_ALARM: {
+            counter = 0; // Reset counter when entering alarm menu
             // Draw a rounded box for the alarm time (centered, 128x64 screen)
             int boxX = 10, boxY = 8, boxW = 108, boxH = 48;
             display.drawRoundRect(boxX, boxY, boxW, boxH, 8, SSD1306_WHITE);
@@ -129,47 +203,44 @@ void interfaceLoop() {
             display.print(alarmEnabled ? "ON" : "OFF");
             display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
 
-            // Footer: instructions
-            display.fillRect(0, 58, 128, 6, SSD1306_BLACK);
-            display.setCursor(4, 59);
-            if (!editingAlarm)
-                display.print("OK: Edit  |  Prev: Back");
-            else if (!editingMinute)
-                display.print("UP/DOWN: Hour  OK: Next");
-            else
-                display.print("UP/DOWN: Min  OK: Done");
-
             // Handle input
-            int in = getUserInput();
-            if (millis() - lastActionTime > 300) {
-                switch (in) {
-                    case 1:  // OK
-                        if (!editingAlarm && !alarmEnabled) { 
-                           editingAlarm = true;
-                           editingMinute = false; 
-                           alarmEnabled = true;}
-                        else if (!editingMinute) { editingMinute = true; alarmEnabled = true; }
-                        else { editingAlarm = false; editingMinute = false; } // Done editing
-                        break;
-                    case 3: // UP
-                        if (editingAlarm) {
-                            if (!editingMinute) alarmHour = (alarmHour + 1) % 24;
-                            else alarmMinute = (alarmMinute + 1) % 60;
-                        }
-                        break;
-                    case 2: // DOWN
-                        if (editingAlarm) {
-                            if (!editingMinute) alarmHour = (alarmHour + 23) % 24;
-                            else alarmMinute = (alarmMinute + 59) % 60;
-                        }
-                        break;
+            InputState input = readUserInput();
+            static int lastRotaryDirection = 0;
+            if (millis() - lastActionTime > 100) { // Was 300, now 100ms for higher sensitivity
+                if (!editingAlarm) {
+                    // Not editing: toggle alarm ON/OFF with rotary left/right (2/3)
+                    if (input.rotaryDirection == 1 && lastRotaryDirection == 0) alarmEnabled = !alarmEnabled;
+                    // Enter hour set mode with OK (1) if alarm is ON
+                    else if (input.swPressed) { editingAlarm = true; editingMinute = false; }
+                    
+                } else if (!editingMinute) {
+                    // Set hour: 2/3 changes hour, 1 moves to minute set
+                    if (input.rotaryDirection == 1 && lastRotaryDirection == 0) {alarmHour = (alarmHour + 23) % 24;}
+                    else if (input.rotaryDirection == -1 && lastRotaryDirection == 0) {alarmHour = (alarmHour + 1) % 24;}
+                    else if (input.swPressed) {editingMinute = true;}
+                    
+                } else {
+                    // Set minute: 2/3 changes minute, 1 finishes editing
+                    if (input.rotaryDirection == 1 && lastRotaryDirection == 0) {alarmMinute = (alarmMinute + 59) % 60;}
+                    else if (input.rotaryDirection == -1 && lastRotaryDirection == 0) {alarmMinute = (alarmMinute + 1) % 60;}
+                    else if (input.swPressed) { editingAlarm = false; editingMinute = false; }
+                    
                 }
+                if (input.rstPressed) {
+                    Serial.println("🔄 Resetting...");
+                    menuSelecting = true; // Go back to menu selection
+                    delay(100); // Debounce
+                    return;
+                }
+                lastRotaryDirection = input.rotaryDirection;
                 lastActionTime = millis();
+                display.display();
             }
             break;
         }
 
-          case MENU_SET_TIMEZONE: {
+        case MENU_SET_TIMEZONE: {
+            static int lastRotaryDirection = 0;
             // Draw a rounded box for the timezone info (centered, 128x64 screen)
             int boxW = 110, boxH = 36;
             int boxX = (128 - boxW) / 2;
@@ -194,29 +265,37 @@ void interfaceLoop() {
             // Footer: instructions
             display.fillRect(0, 56, 128, 8, SSD1306_BLACK);
             display.setCursor(8, 58);
-            int input = getUserInput();
-            if (millis() - lastActionTime > 250) {
-                if (input == 1) {
+            InputState input = readUserInput();
+            if (millis() - lastActionTime > 100) {
+                if (input.rotaryDirection != 0 && lastRotaryDirection == 0) { // Up/Down
                     display.clearDisplay();
                     changeTimeZone();
                     DateTime now = rtc.now();
                     showClockPage(now);
-                    toggleAlarmStatus();
-                    display.display();
+                    showAlarmStatus();
+                    display.display(); 
                 }
+            lastRotaryDirection = input.rotaryDirection;
                 lastActionTime = millis();
+                display.display();
             }
             break;
         }
 
         case MENU_SET_REGION: {
+            static int lastRotaryDirection = 0;
+            counter = 0; 
             // City name bar at the top
             display.setTextSize(1);
             display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
             display.fillRect(0, 0, 128, 12, SSD1306_BLACK);
             display.drawRect(0, 0, 128, 12, SSD1306_WHITE);
+            changeWeatherRegion();    
+            display.clearDisplay();
+
+            // Show the selected region name
             display.setCursor(4, 2);
-            display.print(weatherRegion.c_str());
+            display.print(cityList[selectedCityIndex]);
 
             // Weather info box
             int boxW = 120, boxH = 24;
@@ -227,10 +306,7 @@ void interfaceLoop() {
             // Weather icon (left side of box)
             int iconX = boxX + 4;
             int iconY = boxY + 4;
-            if (currentWeather.find("rain") != std::string::npos || currentWeather.find("Rain") != std::string::npos) {
-                display.fillCircle(iconX + 6, iconY + 8, 5, SSD1306_WHITE);
-                display.fillTriangle(iconX + 6, iconY + 2, iconX, iconY + 14, iconX + 12, iconY + 14, SSD1306_WHITE);
-            } else if (currentWeather.find("cloud") != std::string::npos || currentWeather.find("Cloud") != std::string::npos) {
+            if (currentWeather.find("cloud") != std::string::npos || currentWeather.find("Cloud") != std::string::npos) {
                 display.fillCircle(iconX + 8, iconY + 8, 7, SSD1306_WHITE);
                 display.fillCircle(iconX + 16, iconY + 10, 5, SSD1306_WHITE);
                 display.fillRect(iconX + 8, iconY + 10, 10, 6, SSD1306_WHITE);
@@ -259,45 +335,35 @@ void interfaceLoop() {
             display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
             display.fillRect(0, 56, 128, 8, SSD1306_BLACK);
             display.setCursor(8, 58);
-
-            int input = getUserInput();
-            if (millis() - lastActionTime > 250) {
-                if (input == 3 || input == 2) { // Up/Down
-                    changeWeatherRegion();
-                }
-                lastActionTime = millis();
-            }
+            display.print("Press OK to set region");
+            display.display();
             break;
         }
 
         case MENU_CLOCK: {
+            counter = 0; // Reset counter when entering clock menu
             DateTime now = rtc.now();
             display.clearDisplay();
             showClockPage(now);
-            toggleAlarmStatus();
+            showAlarmStatus();
             display.display();
+            break;
+        }
+
+        case MENU_STOPWATCH: {
+            // Stopwatch placeholder
+            display.setTextSize(1);
+            display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
+            stopWatch(); // Call the stopwatch loop function
             break;
         }
     }
 
-    int in = getUserInput();
-    if (millis() - lastActionTime > 250) {
-        if (in == 1) {
-            switch (currentMenu) {
-                case MENU_ALARM: toggleAlarm(); break;
-                case MENU_SET_TIMEZONE: changeTimeZone(); break;
-                case MENU_SET_REGION: changeWeatherRegion(); break;
-                case MENU_CLOCK: showClockPage(now); break;
-            }
-        }
-        lastActionTime = millis();
-    }
-    display.display();
     // --- Allow Going Back to Menu ---
-    if (millis() - lastActionTime > 500) {
-        if (in == 1) {  // Use 6 or any other code for "back to menu"
-            menuSelecting = true;
-        }
-        lastActionTime = millis();
-    }
+    // if (millis() - lastActionTime > 500) {
+    //     if (input.swPressed) {  // Use 6 or any other code for "back to menu"
+    //         menuSelecting = true;
+    //     }
+    //     lastActionTime = millis();
+    // }
 }

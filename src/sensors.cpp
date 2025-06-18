@@ -6,7 +6,7 @@ unsigned long lastMotionTime = 0;
 bool inIdleAnimation = false;
 const unsigned long idleTimeout = 1 * 60 * 1000; // 1 minute
 const float motionThreshold = 5;
-
+bool idleBlockedForAlarm = false;
 float smoothX = 0;
 float smoothY = 0;
 
@@ -63,32 +63,37 @@ void drawBitmapAt(int16_t x, int16_t y, const uint8_t *bitmap, int16_t w, int16_
 
 void motionSensorLoop() {
   bool pirVal = digitalRead(PIR_PIN);
+ long distance = getDistanceCM();
+  Serial.print("PIR State: ");
+  Serial.print(pirVal);
+  Serial.print(" | Distance: ");
+  Serial.println(distance);
+
+    if (alarmBeeping && pirVal && distance > 0 && distance < 10) {
   long distance = getDistanceCM();
-
-  // --- Serial monitor output for debugging ---
-  Serial.print("Distance: ");
-  Serial.print(distance);
-  Serial.print(" cm, PIR: ");
-  Serial.println(pirVal ? "MOTION" : "NO MOTION");
-
+  if (distance > 0 && distance < 10) {
+      Serial.println("😴 Snooze triggered by motion <10cm!");
+      alarmBeeping = false;
+      snoozeUntil = millis() + SNOOZE_DURATION;
+      // Optionally, give user feedback (e.g., beep or display message)
+    }
+  }
+  // Rotary encoder button handling
   if (
-      digitalRead(0) == LOW || // UP_BUTTON
-      digitalRead(1) == LOW || // DOWN_BUTTON
-      digitalRead(2) == LOW || // PREV_BUTTON
-      digitalRead(4) == LOW || // NEXT_BUTTON
-      digitalRead(5) == LOW || // OK_BUTTON
-      digitalRead(3) == LOW    // RST_PIN
+      digitalRead(pinSW) ==  LOW || // Rotary encoder switch as OK
+      digitalRead(pinRST) == LOW || // RST_PIN as menu select
+      running == true   // Stopwatch running state
   ) {
     lastMotionTime = millis();
     if (inIdleAnimation) {
-      Serial.println("✨ Exiting idle mode due to button press.");
+      Serial.println("✨ Exiting idle mode due to rotary encoder press.");
       inIdleAnimation = false;
       display.clearDisplay();
       display.display();
     }
   }
 
-  if (pirVal && distance > 40 && distance < 500) {
+  if (pirVal && distance > 30 && distance < 500) {
     if (!pirState) {
       Serial.println("🚶 Motion detected!");
       pirState = true;
@@ -101,12 +106,12 @@ void motionSensorLoop() {
       display.display();
     }
   } else {
-    if (pirState && distance > 40 && distance < 500) {
+    if (pirState && distance > 30 && distance < 500) {
       Serial.println("🛑 Motion ended!");
       pirState = false;
     }
     if (!inIdleAnimation && (millis() - lastMotionTime > idleTimeout)) {
-      Serial.println("💤 No motion or button for 1 min. Entering idle animation.");
+      Serial.println("💤 No motion or rotary for 1 min. Entering idle animation.");
       inIdleAnimation = true;
     }
   }
@@ -132,7 +137,7 @@ void motionSensorLoop() {
       display.clearDisplay();
       orienConfig(); // Call orientation config to handle pitch/roll
       display.display();
-      currentFrame += 3; // 2x speed
+      currentFrame += 1; // 2x speed
     } else {
       currentFrame = 0;
       currentAnim = nullptr;
@@ -170,8 +175,8 @@ void orienConfig() {
   // OLED rendering
   display.clearDisplay();
 
-  static int dizzyFrame = 0;
-  static unsigned long lastDizzyFrameTime = 0;
+  static int cryFrame = 0;
+  static unsigned long lastcryFrameTime = 0;
   static unsigned long dizzyStartTime = 0;
 
   if (delta > motionThreshold && !shaking) {
@@ -184,19 +189,19 @@ void orienConfig() {
   if (shaking) {
       // Show dizzy animation frames in a loop for up to 10 seconds or until pitch/roll settle
       unsigned long now = millis();
-      if (now - lastDizzyFrameTime > 80) { // Change frame every 80ms
-          dizzyFrame = (dizzyFrame + 1) % dizzy_allArray_LEN;
-          lastDizzyFrameTime = now;
+      if (now - lastcryFrameTime > 80) { // Change frame every 80ms
+          cryFrame = (cryFrame + 1) % cry_allArray_LEN;
+          lastcryFrameTime = now;
       }
       display.clearDisplay();
-      display.drawBitmap(0, 0, dizzy_allArray[dizzyFrame], 128, 64, SSD1306_WHITE);
+      display.drawBitmap(0, 0, cry_allArray[cryFrame], 128, 64, SSD1306_WHITE);
       display.display();
 
       // End shaking after 10 seconds or if both pitch and roll are between -20 and 20
       if ((now - dizzyStartTime > 10000) ||
           (abs(pitch) < 20 && abs(roll) < 20)) {
           shaking = false;
-          dizzyFrame = 0;
+          cryFrame = 0;
       }
       return; // Do not run idle animation or orientation animation
   }

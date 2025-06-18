@@ -17,18 +17,28 @@ struct TimeZone {
 // Declare extern timeZones array and tzCount
 extern const TimeZone timeZones[];
 extern const int tzCount;
+extern volatile bool alarmBeeping;
+extern const unsigned long SNOOZE_DURATION; // Snooze duration in milliseconds
+extern unsigned long snoozeUntil; // Snooze end time
+extern unsigned long alarmStartTime;
 extern int alarmHour;      // Alarm hour
 extern int alarmMinute;    // Alarm minute
 extern bool alarmEnabled;  // Alarm enabled state
+extern bool running;       // Stopwatch running state
+extern float Cmaj7[];
+extern float G[];
+extern float Am7[];
+extern float Fmaj7[];
 extern RTC_DS1307 rtc; // RTC instance
 // Function declarations
 void changeTimeZone();
-void setTimeZoneIndex(int index);
+void stopWatch();
+void showAlarmStatus();
+void syncRTCWithNTP();
 // Modular display functions
-void showClockPage(const DateTime& nowUtc);
-void toggleAlarmStatus();
-void buzzerTone(uint8_t pin, uint16_t freqHz, uint16_t msDuration);
+void playChord(const float* chord, int len);
 void checkAndTriggerAlarm(const DateTime& now);
-void displayAlarmSettings();
+void showClockPage(const DateTime& nowUtc);
+ // Dummy function to avoid undefined identifier error
 
 #endif

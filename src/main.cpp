@@ -1,59 +1,30 @@
 #include "interface.h"
 
+// Alarm sound state
+int alarmChordIndex = 0;
+unsigned long lastAlarmNoteTime = 0;
+const int alarmChordCount = 4;
+const float* alarmChords[] = {Cmaj7, G, Am7, Fmaj7};
+const int alarmChordLens[] = {4, 3, 4, 4};
 unsigned long lastNTPSync = 0;
 const unsigned long ntpSyncInterval = 6UL * 60UL * 60UL * 1000UL; // 6 hours
 // === Global Display and RTC Objects ===
 Adafruit_SSD1306 display(128, 64, &Wire);
 RTC_DS1307 rtc;
 Adafruit_MPU6050 mpu;
-// === NeoPixel Setup ===
-
 // == Function Prototypes ===
 void displayText(int x, int y, const std::string &text) {
   display.setCursor(x, y);
   display.print(text.c_str());
 }
 
-// Remove lightPixel and all NeoPixel usage
-// void lightPixel(uint32_t color) {
-//   pixel.setPixelColor(0, color);
-//   pixel.show();
-// }
-
-// === Button Handling ===
-int getUserInput() {
-  if (digitalRead(RST_PIN) == LOW) {
-    // lightPixel(pixel.Color(255, 255, 0));
-    return 6;
-  }
-  if (digitalRead(OK_BUTTON) == LOW) {
-    // lightPixel(pixel.Color(0, 255, 0));
-    return 1;
-  }
-  if (digitalRead(NEXT_BUTTON) == LOW) {
-    // lightPixel(pixel.Color(0, 0, 255));
-    return 2;
-  }
-  if (digitalRead(PREV_BUTTON) == LOW) {
-    // lightPixel(pixel.Color(255, 0, 0));
-    return 3;
-  }
-  if (digitalRead(UP_BUTTON) == LOW) { //black  
-    return 4;
-  }
-  if (digitalRead(DOWN_BUTTON) == LOW) { //yellow
-    return 5;
-  }
-  return 0;
-}
-
-const char* ssid = "Airtel_mahe_2477";
-const char* password = "Air@15514";
+const char* ssid = "Wokwi-GUEST"; // WiFi SSID
+const char* password = "";
 
 void playEmojiBootAnimation() {
-  for (int i = 0; i < 60; i++) {   // assuming 90 frames total
+  for (int i = 0; i < 49; i++) {   // assuming 90 frames total
     display.clearDisplay();;
-    display.drawBitmap(0, 0, boot_allArray[i], 128, 64, SSD1306_WHITE);
+    display.drawBitmap(0, 0, temp_intro_allArray[i], 128, 64, SSD1306_WHITE);
     display.display();
     delay(100); // Adjust delay for speed of animation
   }
@@ -99,9 +70,11 @@ void setup() {
     syncRTCWithNTP();
   }
 
-  digitalWrite(BUZZER_PIN, HIGH);
-  delay(500);
-  digitalWrite(BUZZER_PIN, LOW);
+  Serial.println("Buzzer ON");
+  tone(BUZZER_PIN, 1000);
+  delay(1000);
+  Serial.println("Buzzer OFF");
+  noTone(BUZZER_PIN);
 
   Wire.begin(I2C_SDA, I2C_SCL);
 
@@ -117,44 +90,86 @@ void setup() {
   display.display();
 
   // === Emoji Boot Expression ===
-  playEmojiBootAnimation();
+  //playEmojiBootAnimation();
   Serial.println("✅ Emoji boot animation complete!");
   // setupMotionSensor();
-
-  pinMode(NEXT_BUTTON, INPUT_PULLUP);
-  pinMode(PREV_BUTTON, INPUT_PULLUP);
-  pinMode(OK_BUTTON, INPUT_PULLUP);
-  pinMode(UP_BUTTON, INPUT_PULLUP);
-  pinMode(DOWN_BUTTON, INPUT_PULLUP);
+  
+  pinMode(pinCLK, INPUT_PULLUP);
+  pinMode(pinDT, INPUT_PULLUP);
+  pinMode(pinSW, INPUT_PULLUP);
   pinMode(PIR_PIN, INPUT);
-  pinMode(RST_PIN, INPUT_PULLUP);
+  pinMode(pinRST, INPUT_PULLUP);
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+  attachInterrupt(digitalPinToInterrupt(pinCLK), handleEncoderInput, FALLING);
 
   // pixel.begin();
   // pixel.setBrightness(100);
   // lightPixel(pixel.Color(30, 129, 176));
+  attachInterrupt(digitalPinToInterrupt(pinCLK), handleEncoderInput, FALLING);
 }
 
-void loop(){
-  motionSensorLoop(); // Handles motion + idle animation
+void loop() {
+    motionSensorLoop();
+
+    // --- Exit idle animation 10 seconds before alarm ---
+// At the top of loop()
+  if (alarmEnabled && rtc.isrunning()) {
+      DateTime now = rtc.now();
+      const TimeZone& tz = timeZones[selectedTimeZoneIndex];
+      DateTime localNow = now + TimeSpan((int)(tz.offsetHours * 3600));
+
+      int secondsUntilAlarm = (alarmHour * 60 + alarmMinute) * 60
+                            - (localNow.hour() * 60 + localNow.minute()) * 60
+                            - localNow.second();
+
+      if (secondsUntilAlarm > 0 && secondsUntilAlarm <= 10) {
+          if (inIdleAnimation) {
+              Serial.println("⏰ Exiting idle animation: alarm in 10 seconds!");
+              inIdleAnimation = false;
+              display.clearDisplay();
+              display.display();
+          }
+          idleBlockedForAlarm = true;
+      } else {
+          idleBlockedForAlarm = false;
+      }
+  }
+
   if (inIdleAnimation) {
-    // Ensure the idle animation is actually drawn to the display
-    orienConfig();
-    display.display();
-    return;
+      orienConfig();
+      display.display();
+      return;
   }
   // Only do clock & interface work if not idle
   if (rtc.isrunning()) {
     DateTime now = rtc.now();
-    checkAndTriggerAlarm(now);
+    const TimeZone& tz = timeZones[selectedTimeZoneIndex];
+    DateTime localNow = now + TimeSpan((int)(tz.offsetHours * 3600));
+    checkAndTriggerAlarm(localNow);
     showClockPage(now);   // ⏰ check and ring alarm
   } else {
     Serial.println("⚠ RTC not running or not responding");
   }
   interfaceLoop(); // Draw the default clock screen at boot
+
   if (WiFi.status() == WL_CONNECTED && millis() - lastNTPSync > ntpSyncInterval) {
     syncRTCWithNTP();
     lastNTPSync = millis();
   }
+
+  if (alarmBeeping) {
+      if (millis() - alarmStartTime < 60000) {
+          if (millis() - lastAlarmNoteTime > 500) { // Play next chord every 500ms
+              playChord(alarmChords[alarmChordIndex], alarmChordLens[alarmChordIndex]);
+              alarmChordIndex = (alarmChordIndex + 1) % alarmChordCount;
+              lastAlarmNoteTime = millis();
+          }
+      } else {
+          alarmBeeping = false;
+          alarmChordIndex = 0;
+      }
+  }
 }
+

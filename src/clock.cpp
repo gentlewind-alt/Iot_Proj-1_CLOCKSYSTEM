@@ -25,68 +25,69 @@ const TimeZone timeZones[] = {
   {"NZST", 6.5},
 };
 const int tzCount = sizeof(timeZones) / sizeof(timeZones[0]);
+float Cmaj7[] = {261.63, 329.63, 392.00, 493.88};
+float G[]     = {196.00, 246.94, 293.66};
+float Am7[]   = {220.00, 261.63, 329.63, 392.00};
+float Fmaj7[] = {174.61, 220.00, 261.63, 329.63};
 
 int selectedTimeZoneIndex = 0;
+const int noteDuration = 333; // eighth note duration
+const int noteGap = 30;   
 
-bool alarmEnabled = false;
-int alarmHour = 7;
-int alarmMinute = 0;
+bool alarmEnabled = true;
+int alarmHour = 18;
+int alarmMinute = 33;
 
 volatile bool alarmBeeping = false;
-unsigned long snoozeUntil = 0;
+unsigned long snoozeUntil = 60 * 1000;
 
-void buzzerTone(uint8_t pin, uint16_t freqHz, uint16_t msDuration) {
-  pinMode(pin, OUTPUT);
+byte seconds = 0;
+byte minutes = 0;
+byte milliseconds = 0;
 
-  uint32_t interval = 500000 / freqHz;  // μs half-period
-  uint32_t cycles = (freqHz * msDuration) / 1000;
+#define BUZZER_PIN 10
+#define BUZZER_CHANNEL 0
 
-  noInterrupts();
-  for (uint32_t i = 0; i < cycles; ++i) {
-    REG_WRITE(GPIO_OUT_W1TS_REG, 1 << pin);  // HIGH
-    delayMicroseconds(interval);
-    REG_WRITE(GPIO_OUT_W1TC_REG, 1 << pin);  // LOW
-    delayMicroseconds(interval);
+unsigned long alarmStartTime = 0;
+
+const unsigned long SNOOZE_DURATION = 5 * 60 * 1000; // 5 minutes in ms
+
+void playChord(const float* chord, int len) {
+  ledcAttachPin(BUZZER_PIN, BUZZER_CHANNEL); // Attach only once per session if possible
+  for (int i = 0; i < len; i++) {
+    ledcWriteTone(BUZZER_CHANNEL, chord[i]);
+    delay(noteDuration);
+    ledcWriteTone(BUZZER_CHANNEL, 0); // Stop tone
+    delay(noteGap);
   }
-  interrupts();
+  ledcDetachPin(BUZZER_PIN); // Optional: detach after playing
 }
 
 // Alarm functions
 void checkAndTriggerAlarm(const DateTime& now) {
-    static int lastMin = -1;
-    if (!alarmEnabled) return;
+    static int lastCheckedMinute = -1;
+    static bool alarmTriggeredThisMinute = false;
 
-    // Snooze logic
+    if (!alarmEnabled) return;
     if (snoozeUntil && now.unixtime() < snoozeUntil) return;
 
-    if (now.hour() != alarmHour || now.minute() != alarmMinute) {
-        lastMin = -1;
-        return;
+    // Reset trigger flag when minute changes
+    if (now.minute() != lastCheckedMinute) {
+        alarmTriggeredThisMinute = false;
+        lastCheckedMinute = now.minute();
     }
-    if (now.minute() == lastMin) return;
 
-    lastMin = now.minute();
-
-     Serial.println("🔔 Alarm Triggered!");
-    alarmBeeping = true;
-    unsigned long startBeep = millis();
-    unsigned long snoozeSet = 0;
-    while (millis() - startBeep < 60000) // Beep for 60 seconds or until snooze
-    {
-        buzzerTone(BUZZER_PIN, 2000, 30); // Short beep (30ms)
-        delay(30); // Small pause between beeps
-
-        // Check for snooze button
-        if (getUserInput() == 5) { // DOWN button
-            // Use current time for snooze, not the original 'now'
-            snoozeUntil = rtc.now().unixtime() + 30; // 5 min snooze
-            Serial.println("😴 Snoozed for 5 minutes!");
-            snoozeSet = 1;
-            break;
-        }
-        // Optionally, allow other code to run here (yield, etc.)
+    // Trigger alarm if not already triggered this minute
+    if (!alarmTriggeredThisMinute &&
+        now.hour() == alarmHour &&
+        now.minute() == alarmMinute) {
+        Serial.println("🔔 Alarm Triggered!");
+        alarmBeeping = true;
+        alarmStartTime = millis();
+        alarmTriggeredThisMinute = true;
+        inIdleAnimation = false; // Stop idle animation if alarm is triggered
+         // Stop idle animation if alarm is triggered
     }
-    alarmBeeping = false;
 }
 
 void displayAlarmSettings() {
@@ -113,9 +114,10 @@ void showClockPage(const DateTime& nowUtc) {
     // Show timezone name
     display.setTextSize(1);
     display.setCursor(0, 0);
-    display.print("TZ: ");
+    display.print("TZ:");
     display.print(tz.name);
-
+    display.setTextSize(1);
+    
     // Show time in large font, centered
     char timeBuf[16];
     snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d:%02d", adjustedTime.hour(), adjustedTime.minute(), adjustedTime.second());
@@ -124,7 +126,7 @@ void showClockPage(const DateTime& nowUtc) {
     uint16_t w, h;
     display.getTextBounds(timeBuf, 0, 0, &x1, &y1, &w, &h);
     int textX = (128 - w) / 2;
-    int textY = 20;
+    int textY = 25;
     display.setCursor(textX, textY);
     display.print(timeBuf);
 
@@ -142,24 +144,25 @@ void showClockPage(const DateTime& nowUtc) {
     display.print(dateBuf);
 }
 
-void toggleAlarmStatus() {
+void showAlarmStatus() {
   // Toggle alarm status if OK button is pressed
-  if (getUserInput() == 1) { // Assuming 1 is OK button
+  InputState input = readUserInput();
+  int lastRotaryDirection = input.rotaryDirection;
+  if (input.rotaryDirection != 0) { // Assuming 1 is OK button
     alarmEnabled = !alarmEnabled;
-    delay(200); // Debounce
+    delay(100); // Debounce
   }
-
+  lastRotaryDirection = input.rotaryDirection;
   // Show alarm status and time at the bottom
   char alarmBuf[32];
-  snprintf(alarmBuf, sizeof(alarmBuf), "Alarm: %s %02d:%02d", alarmEnabled ? "ON" : "OFF", alarmHour, alarmMinute);
-
-  display.setCursor(0, 54);
+  snprintf(alarmBuf, sizeof(alarmBuf), "|Alarm:%s %02d:%02d", alarmEnabled ? "ON" : "OFF", alarmHour, alarmMinute);
+  display.setCursor(38, 0);
   display.print(alarmBuf);
 }
 
 // Cycle to next time zone in list
 void changeTimeZone() {
-  selectedTimeZoneIndex = (selectedTimeZoneIndex + 1) % tzCount;
+    selectedTimeZoneIndex = (selectedTimeZoneIndex + 1) % tzCount;
 }
 
 // Optionally, a function to set timezone index manually:
@@ -199,4 +202,70 @@ void syncRTCWithNTP() {
   if (!success) {
     Serial.println("❌ Failed to sync RTC with NTP after retries.");
   }
+}
+
+void stopWatch() {
+  static unsigned long startTime = 0;
+  static unsigned long elapsed = 0;
+  static int lastRotaryDirection = 0;
+  counter = 0;
+
+  InputState input = readUserInput();
+  if (input.swPressed) { // OK button to start/stop
+    running = !running;
+    if (running) {
+      startTime = millis() - elapsed; // Continue from where left off
+    } else {
+      elapsed = millis() - startTime;
+    }
+    delay(100); // Debounce
+  }
+
+  if (input.rotaryDirection != 0 && lastRotaryDirection == 0) {
+    startTime = 0;
+    elapsed = 0;
+    running = false; // Debugging line to show counter value
+  }
+  lastRotaryDirection = input.rotaryDirection;
+  display.clearDisplay();
+
+  // Draw rounded rectangle box for stopwatch area
+  int boxX = 10, boxY = 12, boxW = 108, boxH = 40, radius = 8;
+  display.drawRoundRect(boxX, boxY, boxW, boxH, radius, WHITE);
+
+  // Draw play/pause icon at left inside the box
+  int iconX = boxX + 6, iconY = boxY + 10;
+  if (running) {
+    // Draw "pause" icon (two vertical bars)
+    display.fillRect(iconX, iconY, 4, 14, WHITE);
+    display.fillRect(iconX + 8, iconY, 4, 14, WHITE);
+  } else {
+    // Draw "play" icon (triangle)
+    display.fillTriangle(iconX, iconY, iconX, iconY + 14, iconX + 12, iconY + 7, WHITE);
+  }
+
+  // Draw stopwatch time or "Stopped" centered in the box
+  unsigned long displayTime = running ? (millis() - startTime) : elapsed;
+  unsigned int totalSeconds = displayTime / 1000;
+  unsigned int minutes = totalSeconds / 60;
+  unsigned int seconds = totalSeconds % 60;
+  unsigned int tenths = (displayTime % 1000) / 100;
+
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%02u:%02u:%01u", minutes, seconds, tenths);
+  display.setTextSize(2);
+  int16_t x1, y1;
+  uint16_t w, h;
+  display.getTextBounds(buf, 0, 0, &x1, &y1, &w, &h);
+  int textX = boxX + (boxW - w) / 2 + 8; // +8 to offset for icon
+  int textY = boxY + (boxH - h) / 2;
+  display.setCursor(textX, textY);
+  display.print(buf);
+
+  // Draw label below the box
+  display.setTextSize(1);
+  display.setCursor(34, boxY + boxH + 8);
+  display.print("OK: Start/Stop");
+
+  display.display();
 }

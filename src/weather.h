@@ -11,6 +11,7 @@ extern String units;  // ← Stores units (metric/imperial)
 extern int selectedCityIndex;
 extern const char* cityList[];
 extern const int cityCount;
+extern std::string weatherRegion;  // ← Stores selected city name
 extern std::string currentWeather; 
 
 void changeWeatherRegion();

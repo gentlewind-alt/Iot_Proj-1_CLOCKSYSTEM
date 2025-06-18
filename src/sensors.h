@@ -10,9 +10,10 @@ extern float smoothY;  // Smoothed Y-axis orientation
 extern bool shaking;  // Whether the device is currently shaking
 extern unsigned long shakeStart;  // Start time of the shaking
 extern const float motionThreshold;  // Threshold for detecting shaking
-
+extern bool idleBlockedForAlarm;
+extern long getDistanceCM();  // Function to get distance from ultrasonic sensor
+void motionSensorLoop();  // Main loop for handling motion sensor events
 void setupMotionSensor();
-void motionSensorLoop();
 void orienConfig();
 void drawBitmapAt(int16_t x, int16_t y, const uint8_t *bitmap, int16_t w, int16_t h, uint16_t color);
 extern Animation* currentAnim;  // Current animation being displayed
