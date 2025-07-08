@@ -8,12 +8,15 @@ bool menuSelecting = false;
 int currentMenu = MENU_CLOCK; // Default to clock
 static int selectedMenuIndex = MENU_CLOCK;
 static int lastMenu = -1; // Track the last menu for submenu logic
-
+static int pendingMenuIndex = -1;
+static unsigned long pendingMenuTime = 0;
+static bool menuSwitchPending = false;
 // === Global Variables ===
 static unsigned long lastActionTime = 0;
 bool running = false;
 static bool editingAlarm = false;
 static bool editingMinute = false;
+static bool changeWeather = false;
 static unsigned long lastRtcRead = 0;
 static DateTime now;
 bool choice = false;
@@ -40,7 +43,7 @@ const char* getMenuName(int index) {
   switch (index) {
     case MENU_CLOCK: return "Clock";
     case MENU_ALARM: return "Alarm";
-    case MENU_SET_REGION: return "Weather Region";
+    case MENU_SET_REGION: return "Weather";
     case MENU_STOPWATCH: return "Stopwatch";
     case MENU_SET_TIMEZONE: return "Timezone";
     default: return "Unknown";
@@ -93,73 +96,49 @@ InputState readUserInput() {
 }
 
 // === Main Menu Loop ===
-void interfaceLoop() {
-    static int lastSwPinState = HIGH;
-    int swPinState = digitalRead(pinSW);
+void interfaceLoop(const InputState& input) {
+    static int lastRotaryDirection = 0;
 
-    if (swPinState == LOW && lastSwPinState == HIGH && !menuSelecting && currentMenu == MENU_CLOCK) {
-        menuSelecting = true;
-        lastSwPinState = swPinState;
-        delay(100); // Debounce
+    // --- Rotary on any menu: preview and switch after 2s ---
+    if ((!editingAlarm && !editingMinute) && (!changeWeather) && (input.rotaryDirection == 1 || input.rotaryDirection == -1 
+        && 
+        lastRotaryDirection == 0) && (millis() - lastRotaryActionTime > rotaryDebounceDelay)){
+        // Calculate new menu index
+        int newIndex = currentMenu;
+        if (input.rotaryDirection == 1) {
+            newIndex = (currentMenu + 1) % MENU_COUNT;
+        } else if (input.rotaryDirection == -1) {
+            newIndex = (currentMenu - 1 + MENU_COUNT) % MENU_COUNT;
+        }
+        pendingMenuIndex = newIndex;
+        pendingMenuTime = millis();
+        menuSwitchPending = true;
+
+        // Show menu name in center
+        display.clearDisplay();
+        std::string menuName = getMenuName(pendingMenuIndex);
+        int textX = (128 - menuName.length() * 12) / 2;
+        int textY = (64 - 16) / 2;
+        display.setTextSize(2);
+        display.setCursor(textX, textY);
+        display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
+        display.print(menuName.c_str());
+        display.display();
+        lastRotaryDirection = input.rotaryDirection;
         return;
     }
-    lastSwPinState = swPinState;
+    lastRotaryDirection = input.rotaryDirection;
 
-    if (menuSelecting) {
-        menuEntryTime = millis();
-        display.clearDisplay();
-        displayText(0, 0, "Menu:");
-
-        for (int i = 0; i < MENU_COUNT_CONST; ++i) {
-            std::string line = (i == selectedMenuIndex ? "> " : "  ");
-            line += getMenuName(i);
-            displayText(0, 12 + i * 10, line.c_str());
-        }
-
-        InputState input = readUserInput();  // 1=OK, 2=Down, 3=Up,
-
-        if (millis() - lastActionTime > 0) {
-            static bool lastSwPressed = false;
-            static bool lastRstPressed = false;
-
-            if (input.swPressed && !lastSwPressed) {  // OK (edge detection)
-                currentMenu = selectedMenuIndex;
-                menuSelecting = false;
-            }
-            lastSwPressed = input.swPressed;
-
-            if (input.rstPressed && !lastRstPressed) { // RST (edge detection)
-                menuSelecting = !menuSelecting;
-                counter = 0;
-                delay(100); // Debounce
-                return;
-            }
-            lastRstPressed = input.rstPressed;
-
-            // Rotary debounce as before
-            if ((input.rotaryDirection == 1 || input.rotaryDirection == -1) &&
-                (millis() - lastRotaryActionTime > rotaryDebounceDelay)) {
-                if (input.rotaryDirection == 1) {
-                    selectedMenuIndex = (selectedMenuIndex + 1) % MENU_COUNT;
-                } else if (input.rotaryDirection == -1) {
-                    selectedMenuIndex = (selectedMenuIndex - 1 + MENU_COUNT) % MENU_COUNT;
-                }
-                lastRotaryActionTime = millis();
-            }
-            lastActionTime = millis();
-        }
-        display.display();
-        return;  // skip rest of loop while selecting
-    }
-
-    // --- RST_PIN handling: Go back to menu if pressed ---
-    InputState input = readUserInput();
-        if (input.rstPressed) { // RST_PIN must be defined and pinMode set in main.cpp
-            menuSelecting = !menuSelecting; // Toggle menuSelecting state
-            counter = 0;
-            delay(100); // Debounce
+    // If a menu switch is pending, wait 2 seconds before switching
+    if (menuSwitchPending) {
+        if (millis() - pendingMenuTime >= 500) {
+            currentMenu = pendingMenuIndex;
+            menuSwitchPending = false;
+        } else {
+            // Still showing preview, do not process menu logic
             return;
         }
+    }
 
     display.clearDisplay();
     DateTime nowIST = rtc.now();
@@ -167,6 +146,7 @@ void interfaceLoop() {
 
     switch (currentMenu) {
         case MENU_ALARM: {
+            static int lastDirection = 0;
             counter = 0; // Reset counter when entering alarm menu
             // Draw a rounded box for the alarm time (centered, 128x64 screen)
             int boxX = 10, boxY = 8, boxW = 108, boxH = 48;
@@ -205,34 +185,34 @@ void interfaceLoop() {
 
             // Handle input
             InputState input = readUserInput();
-            static int lastRotaryDirection = 0;
+            
             if (millis() - lastActionTime > 100) { // Was 300, now 100ms for higher sensitivity
                 if (!editingAlarm) {
                     // Not editing: toggle alarm ON/OFF with rotary left/right (2/3)
-                    if (input.rotaryDirection == 1 && lastRotaryDirection == 0) alarmEnabled = !alarmEnabled;
+                    if (input.rstPressed) alarmEnabled = !alarmEnabled;
                     // Enter hour set mode with OK (1) if alarm is ON
                     else if (input.swPressed) { editingAlarm = true; editingMinute = false; }
                     
                 } else if (!editingMinute) {
                     // Set hour: 2/3 changes hour, 1 moves to minute set
-                    if (input.rotaryDirection == 1 && lastRotaryDirection == 0) {alarmHour = (alarmHour + 23) % 24;}
-                    else if (input.rotaryDirection == -1 && lastRotaryDirection == 0) {alarmHour = (alarmHour + 1) % 24;}
+                    if (input.rotaryDirection == 1 && lastDirection == 0) {alarmHour = (alarmHour + 23) % 24;}
+                    else if (input.rotaryDirection == -1 && lastDirection == 0) {alarmHour = (alarmHour + 1) % 24;}
                     else if (input.swPressed) {editingMinute = true;}
                     
                 } else {
                     // Set minute: 2/3 changes minute, 1 finishes editing
-                    if (input.rotaryDirection == 1 && lastRotaryDirection == 0) {alarmMinute = (alarmMinute + 59) % 60;}
-                    else if (input.rotaryDirection == -1 && lastRotaryDirection == 0) {alarmMinute = (alarmMinute + 1) % 60;}
+                    if (input.rotaryDirection == 1 && lastDirection == 0) {alarmMinute = (alarmMinute + 59) % 60;}
+                    else if (input.rotaryDirection == -1 && lastDirection == 0) {alarmMinute = (alarmMinute + 1) % 60;}
                     else if (input.swPressed) { editingAlarm = false; editingMinute = false; }
                     
                 }
-                if (input.rstPressed) {
-                    Serial.println("🔄 Resetting...");
-                    menuSelecting = true; // Go back to menu selection
-                    delay(100); // Debounce
-                    return;
-                }
-                lastRotaryDirection = input.rotaryDirection;
+                // if (input.rstPressed) {
+                //     Serial.println("🔄 Resetting...");
+                //     menuSelecting = true; // Go back to menu selection
+                //     delay(100); // Debounce
+                //     return;
+                // }
+                lastDirection = input.rotaryDirection;
                 lastActionTime = millis();
                 display.display();
             }
@@ -240,7 +220,7 @@ void interfaceLoop() {
         }
 
         case MENU_SET_TIMEZONE: {
-            static int lastRotaryDirection = 0;
+            static int lastDirection = 0;
             // Draw a rounded box for the timezone info (centered, 128x64 screen)
             int boxW = 110, boxH = 36;
             int boxX = (128 - boxW) / 2;
@@ -267,7 +247,7 @@ void interfaceLoop() {
             display.setCursor(8, 58);
             InputState input = readUserInput();
             if (millis() - lastActionTime > 100) {
-                if (input.rotaryDirection != 0 && lastRotaryDirection == 0) { // Up/Down
+                if (input.rstPressed) { // Up/Down
                     display.clearDisplay();
                     changeTimeZone();
                     DateTime now = rtc.now();
@@ -275,7 +255,7 @@ void interfaceLoop() {
                     showAlarmStatus();
                     display.display(); 
                 }
-            lastRotaryDirection = input.rotaryDirection;
+            lastDirection = input.rotaryDirection;
                 lastActionTime = millis();
                 display.display();
             }
@@ -283,14 +263,27 @@ void interfaceLoop() {
         }
 
         case MENU_SET_REGION: {
-            static int lastRotaryDirection = 0;
-            counter = 0; 
+            static int lastDirection = 0;
             // City name bar at the top
             display.setTextSize(1);
             display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
             display.fillRect(0, 0, 128, 12, SSD1306_BLACK);
             display.drawRect(0, 0, 128, 12, SSD1306_WHITE);
-            changeWeatherRegion();    
+            if (input.rstPressed){
+                changeWeather = !changeWeather;
+                if (changeWeather) {
+                    changeWeatherRegion();
+                    display.clearDisplay();
+                    display.setCursor(0, 0);
+                    display.print("Fetching weather...");
+                    display.display();
+                } 
+                else {
+                    display.print("Failed");
+                    // fetchWeather(); // Fetch weather for the selected region
+                }
+                
+            }       
             display.clearDisplay();
 
             // Show the selected region name
@@ -334,8 +327,10 @@ void interfaceLoop() {
             // Footer: hint for next city
             display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
             display.fillRect(0, 56, 128, 8, SSD1306_BLACK);
-            display.setCursor(8, 58);
+            display.setCursor(8, 52);
             display.print("Press OK to set region");
+            lastDirection = input.rotaryDirection;
+            lastActionTime = millis();
             display.display();
             break;
         }
@@ -367,3 +362,4 @@ void interfaceLoop() {
     //     lastActionTime = millis();
     // }
 }
+

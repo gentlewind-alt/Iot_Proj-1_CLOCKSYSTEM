@@ -17,13 +17,13 @@ int selectedCityIndex = 0;
 std::string weatherRegion = cityList[selectedCityIndex];
 
 void changeWeatherRegion() {
-  InputState input = readUserInput();
-  if (input.rotaryDirection == 1 && lastRotaryDirection == 0) {
+  InputState weatherChangeinput;
+  if (weatherChangeinput.rotaryDirection == 1 && lastRotaryDirection == 0) {
       selectedCityIndex = (selectedCityIndex + 1) % cityCount;     
-  } else if (input.rotaryDirection == -1 && lastRotaryDirection == 0) {
+  } else if (weatherChangeinput.rotaryDirection == -1 && lastRotaryDirection == 0) {
       selectedCityIndex = (selectedCityIndex - 1 + cityCount) % cityCount;
   }
-  lastRotaryDirection = input.rotaryDirection;
+  lastRotaryDirection = weatherChangeinput.rotaryDirection;
   weatherRegion = cityList[selectedCityIndex];
   fetchWeather();  // auto-update when changed
 }

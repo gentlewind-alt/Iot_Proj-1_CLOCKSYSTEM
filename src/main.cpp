@@ -102,12 +102,13 @@ void setup() {
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
   pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
   attachInterrupt(digitalPinToInterrupt(pinCLK), handleEncoderInput, FALLING);
 
   // pixel.begin();
   // pixel.setBrightness(100);
   // lightPixel(pixel.Color(30, 129, 176));
-  attachInterrupt(digitalPinToInterrupt(pinCLK), handleEncoderInput, FALLING);
+  // attachInterrupt(digitalPinToInterrupt(pinCLK), handleEncoderInput, FALLING);
 }
 
 void loop() {
@@ -152,7 +153,8 @@ void loop() {
   } else {
     Serial.println("⚠ RTC not running or not responding");
   }
-  interfaceLoop(); // Draw the default clock screen at boot
+  InputState currentInput = readUserInput();
+  interfaceLoop(currentInput); // Draw the default clock screen at boot
 
   if (WiFi.status() == WL_CONNECTED && millis() - lastNTPSync > ntpSyncInterval) {
     syncRTCWithNTP();
@@ -172,4 +174,3 @@ void loop() {
       }
   }
 }
-

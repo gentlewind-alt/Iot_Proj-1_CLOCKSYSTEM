@@ -145,14 +145,16 @@ void showClockPage(const DateTime& nowUtc) {
 }
 
 void showAlarmStatus() {
+  static bool lastswPressed = false;
   // Toggle alarm status if OK button is pressed
   InputState input = readUserInput();
-  int lastRotaryDirection = input.rotaryDirection;
-  if (input.rotaryDirection != 0) { // Assuming 1 is OK button
+  // int lastRotaryDirection = input.rotaryDirection;
+  if (input.swPressed && !lastswPressed) { // Assuming 1 is OK button
     alarmEnabled = !alarmEnabled;
-    delay(100); // Debounce
+    delay(300); // Debounce
   }
-  lastRotaryDirection = input.rotaryDirection;
+  lastswPressed = input.swPressed;
+  // lastRotaryDirection = input.rotaryDirection;
   // Show alarm status and time at the bottom
   char alarmBuf[32];
   snprintf(alarmBuf, sizeof(alarmBuf), "|Alarm:%s %02d:%02d", alarmEnabled ? "ON" : "OFF", alarmHour, alarmMinute);
@@ -207,7 +209,7 @@ void syncRTCWithNTP() {
 void stopWatch() {
   static unsigned long startTime = 0;
   static unsigned long elapsed = 0;
-  static int lastRotaryDirection = 0;
+  static int la = 0;
   counter = 0;
 
   InputState input = readUserInput();
@@ -221,12 +223,11 @@ void stopWatch() {
     delay(100); // Debounce
   }
 
-  if (input.rotaryDirection != 0 && lastRotaryDirection == 0) {
+  if (input.rstPressed) {
     startTime = 0;
     elapsed = 0;
     running = false; // Debugging line to show counter value
   }
-  lastRotaryDirection = input.rotaryDirection;
   display.clearDisplay();
 
   // Draw rounded rectangle box for stopwatch area
@@ -264,7 +265,7 @@ void stopWatch() {
 
   // Draw label below the box
   display.setTextSize(1);
-  display.setCursor(34, boxY + boxH + 8);
+  display.setCursor(34, boxY + boxH + 4);
   display.print("OK: Start/Stop");
 
   display.display();

@@ -83,8 +83,8 @@
     [ "encoder1:SW", "esp:4", "green", [ "h0" ] ],
     [ "encoder1:GND", "esp:GND.4", "black", [ "h0" ] ],
     [ "esp:GND.3", "btn1:2.l", "black", [ "h0" ] ],
-    [ "encoder1:VCC", "esp:GND.5", "red", [ "h38.4", "v-76.4" ] ],
-    [ "esp:1", "btn1:1.l", "green", [ "h-9.6", "v38.4" ] ]
+    [ "esp:1", "btn1:1.l", "green", [ "h-9.6", "v38.4" ] ],
+    [ "encoder1:VCC", "esp:5V.2", "red", [ "h38.4", "v-86" ] ]
   ],
   "dependencies": {}
 }

@@ -46,7 +46,7 @@ struct InputState {
 };
 extern InputState readUserInput(); // Reads rotary encoder and button states
 // Interface core
-void interfaceLoop();
+void interfaceLoop(const InputState &input);
 // Actions
 void toggleAlarm();
 void changeTimeZone();
