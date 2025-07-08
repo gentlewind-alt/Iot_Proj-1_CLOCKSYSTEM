@@ -115,7 +115,8 @@ void motionSensorLoop() {
   }
 
   // Rotary encoder/button or stopwatch running disables idle animation
-  if (
+  if (digitalRead(pinCLK) != 0 ||
+      digitalRead(pinDT) != 0 ||
       digitalRead(pinSW) == LOW ||
       digitalRead(pinRST) == LOW ||
       running == true

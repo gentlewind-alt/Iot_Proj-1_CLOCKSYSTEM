@@ -16,7 +16,6 @@ static unsigned long lastActionTime = 0;
 bool running = false;
 static bool editingAlarm = false;
 static bool editingMinute = false;
-static bool changeWeather = false;
 static unsigned long lastRtcRead = 0;
 static DateTime now;
 bool choice = false;
@@ -270,19 +269,12 @@ void interfaceLoop(const InputState& input) {
             display.fillRect(0, 0, 128, 12, SSD1306_BLACK);
             display.drawRect(0, 0, 128, 12, SSD1306_WHITE);
             if (input.rstPressed){
-                changeWeather = !changeWeather;
-                if (changeWeather) {
+                changeWeather = !changeWeather;               
                     changeWeatherRegion();
                     display.clearDisplay();
                     display.setCursor(0, 0);
                     display.print("Fetching weather...");
                     display.display();
-                } 
-                else {
-                    display.print("Failed");
-                    // fetchWeather(); // Fetch weather for the selected region
-                }
-                
             }       
             display.clearDisplay();
 
@@ -328,7 +320,7 @@ void interfaceLoop(const InputState& input) {
             display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
             display.fillRect(0, 56, 128, 8, SSD1306_BLACK);
             display.setCursor(8, 52);
-            display.print("Press OK to set region");
+            display.print(changeWeather ? "YES" : "NO");
             lastDirection = input.rotaryDirection;
             lastActionTime = millis();
             display.display();
