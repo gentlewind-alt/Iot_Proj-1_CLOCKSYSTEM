@@ -2,40 +2,33 @@
 #define SENSORS_H
 
 #include <Arduino.h>
-#include <RTClib.h>
 
-// Forward declarations for types used
-struct Animation;
-extern const Animation* currentAnim;;
-extern int currentFrame;
+// === Pin definitions ===
+// Make sure these match your actual wiring
+// #define PIR_PIN    4    // PIR motion sensor
+// #define TRIG_PIN   5    // Ultrasonic trigger
+// #define ECHO_PIN   6    // Ultrasonic echo
+// #define pinSW      7    // Navigation button (OK/Select)
+// #define pinRST     8    // Reset/Back button
 
-// Scheduler struct
-struct AnimationSchedule {
-    int startHour;
-    int endHour;
-    const Animation** anims;
-    int numAnims;
-};
+// === External variables ===
+extern bool inIdleAnimation;
+extern bool isIdlePlaying;
+extern bool shaking;
+extern const unsigned long idleTimeout;
+extern unsigned long lastMotionTime;
 
-extern bool pirState;  // Current state of the PIR sensor
-extern unsigned long lastMotionTime;  // Last time motion was detected
-extern bool inIdleAnimation;  // Whether the device is in idle animation mode
-extern const unsigned long idleTimeout;  // Timeout for entering idle animation
-extern const float motionThreshold;  // Threshold for detecting shaking
-extern bool idleBlockedForAlarm;
-extern float smoothX;  // Smoothed X-axis orientation
-extern float smoothY;  // Smoothed Y-axis orientation
-extern bool shaking;  // Whether the device is currently shaking
-extern unsigned long shakeStart;  // Start time of the shaking
-extern const unsigned long shakeDuration;  // Duration of the shake animation
+// Alarm related variables (declared in clock.cpp or main.cpp)
+extern volatile bool alarmBeeping;
+extern unsigned long snoozeUntil;
+extern const unsigned long SNOOZE_DURATION;
+extern bool running;        // Stopwatch state
+extern bool alarmEditing;   // Alarm edit mode state
 
-extern AnimationSchedule schedules[];
-extern const int NUM_SCHEDULES;
-
+// === Function prototypes ===
 void setupMotionSensor();
-long getDistanceCM();  // Function to get distance from ultrasonic sensor
-void drawBitmapAt(int16_t x, int16_t y, const uint8_t *bitmap, int16_t w, int16_t h, uint16_t color);
-void motionSensorLoop();  // Main loop for handling motion sensor events
-void orienConfig();
+long getDistanceCM();
+void checkForUserActivity();
+void playScheduledAnimation();
 
 #endif

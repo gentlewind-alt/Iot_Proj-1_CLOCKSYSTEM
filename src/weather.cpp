@@ -5,7 +5,7 @@ const char* apiKey = ENV_API;
 #include "interface.h"// For JSON parsing
 
 std::string currentWeather = "Loading...";
-static bool changeWeather = false;
+bool changeWeather = false;
 static int lastRotaryDirection = 0;
 // List of up to 5 city names or coordinates
 const char* cityList[] = {

@@ -2,7 +2,7 @@
 
 extern int selectedTimeZoneIndex;
 extern Adafruit_SSD1306 display;
-extern RTC_DS1307 rtc;
+AnimatedGIF gif;
 // Add this extern so main.cpp and interface.cpp share the same variable
 bool menuSelecting = false;
 int currentMenu = MENU_CLOCK; // Default to clock
@@ -16,9 +16,11 @@ static unsigned long lastActionTime = 0;
 bool running = false;
 static bool editingAlarm = false;
 static bool editingMinute = false;
+bool alarmEditing = false;
 static unsigned long lastRtcRead = 0;
 static DateTime now;
 bool choice = false;
+bool rotaryUsed = false; 
 volatile int counter = 0; // Rotary encoder counter
 unsigned long menuEntryTime = 0; // Add near the top, outside any function
 static unsigned long lastRotaryActionTime = 0;
@@ -52,9 +54,11 @@ const char* getMenuName(int index) {
 // === Input Handling ===
 volatile unsigned long lastEncoderTime = 0;
 const unsigned long encoderDebounce = 2; // ms
+const unsigned long inputSensitivityDelay = 100; // ms, debounce for alarm menu input handling
 
 void IRAM_ATTR handleEncoderInput() {
     unsigned long now = millis();
+
     if (now - lastEncoderTime > encoderDebounce) {
         int dtValue = digitalRead(pinDT);
         if (dtValue == HIGH) {
@@ -63,6 +67,9 @@ void IRAM_ATTR handleEncoderInput() {
             counter--;
         }
         lastEncoderTime = now;
+        rotaryUsed = true; // Set flag to indicate rotary was used
+    } else {
+        rotaryUsed = false; // Reset flag if debounce not passed
     }
 }
 
@@ -76,6 +83,17 @@ int getCounter() {
 
 InputState readUserInput() {
     static int lastCounter = 0;
+    static unsigned long lastSwTime = 0;
+    static unsigned long lastRstTime = 0;
+    static int lastSwState = HIGH;
+    static int lastRstState = HIGH;
+    static unsigned long swPressStartTime = 0;
+    static unsigned long rstPressStartTime = 0;
+    
+    // Debounce constants
+    const unsigned long BUTTON_DEBOUNCE_MS = 50;    // Time to wait after detecting LOW
+    const unsigned long BUTTON_REPRESS_MIN_MS = 200; // Minimum time between presses
+    
     int rotaryDirection = 0; 
     int currentCounter = getCounter();
     if (currentCounter != lastCounter) {
@@ -87,8 +105,46 @@ InputState readUserInput() {
         lastCounter = currentCounter;
     }
 
-    int swPressed = (digitalRead(pinSW) == LOW);
-    int rstPressed = (digitalRead(pinRST) == LOW); // or your RST pin
+    unsigned long currentTime = millis();
+    int swPressed = 0;
+    int rstPressed = 0;
+    
+    // Debounce SW button (improved)
+    int swState = digitalRead(pinSW);
+    if (swState == LOW && lastSwState == HIGH) {
+        // Button pressed - record the start time
+        swPressStartTime = currentTime;
+    }
+    // Check if button has been held LOW for debounce time AND enough time since last press
+    if (swState == LOW && (currentTime - swPressStartTime) >= BUTTON_DEBOUNCE_MS && 
+        (currentTime - lastSwTime) >= BUTTON_REPRESS_MIN_MS) {
+        swPressed = 1;
+        lastSwTime = currentTime;
+        swPressStartTime = currentTime; // Reset to prevent repeated triggers
+    }
+    // Reset debounce if button released
+    if (swState == HIGH && lastSwState == LOW) {
+        swPressStartTime = 0;
+    }
+    lastSwState = swState;
+    
+    // Debounce RST button (improved consistency)
+    int rstState = digitalRead(pinRST);
+    if (rstState == LOW && lastRstState == HIGH) {
+        // Button pressed - record the start time
+        rstPressStartTime = currentTime;
+    }
+    // Check if button has been held LOW for debounce time AND enough time since last press
+    if (rstState == LOW && (currentTime - rstPressStartTime) >= BUTTON_DEBOUNCE_MS && 
+        (currentTime - lastRstTime) >= BUTTON_REPRESS_MIN_MS) {
+        rstPressed = 1;
+        lastRstTime = currentTime;
+    }
+    // Reset debounce if button released
+    if (rstState == HIGH && lastRstState == LOW) {
+        rstPressStartTime = 0;
+    }
+    lastRstState = rstState;
 
     InputState state = {rotaryDirection, swPressed, rstPressed};
     return state;
@@ -97,10 +153,10 @@ InputState readUserInput() {
 // === Main Menu Loop ===
 void interfaceLoop(const InputState& input) {
     static int lastRotaryDirection = 0;
+    static int lastDirection = 0;
 
     // --- Rotary on any menu: preview and switch after 2s ---
-    if ((!editingAlarm && !editingMinute) && (!changeWeather) && (input.rotaryDirection == 1 || input.rotaryDirection == -1 
-        && 
+    if ((!editingAlarm && !editingMinute) && (!changeWeather) && ((input.rotaryDirection == 1 || input.rotaryDirection == -1) && 
         lastRotaryDirection == 0) && (millis() - lastRotaryActionTime > rotaryDebounceDelay)){
         // Calculate new menu index
         int newIndex = currentMenu;
@@ -140,13 +196,33 @@ void interfaceLoop(const InputState& input) {
     }
 
     display.clearDisplay();
-    DateTime nowIST = rtc.now();
+    time_t nowTime = time(nullptr);         // Get current time from internal RTC
+    struct tm timeinfo;
+    localtime_r(&nowTime, &timeinfo);  
     const TimeZone& tz = timeZones[selectedTimeZoneIndex];
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    
 
     switch (currentMenu) {
         case MENU_ALARM: {
-            static int lastDirection = 0;
-            counter = 0; // Reset counter when entering alarm menu
+            bool inIdleAnimation = false; // Reset idle animation state
             // Draw a rounded box for the alarm time (centered, 128x64 screen)
             int boxX = 10, boxY = 8, boxW = 108, boxH = 48;
             display.drawRoundRect(boxX, boxY, boxW, boxH, 8, SSD1306_WHITE);
@@ -182,27 +258,24 @@ void interfaceLoop(const InputState& input) {
             display.print(alarmEnabled ? "ON" : "OFF");
             display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
 
-            // Handle input
-            InputState input = readUserInput();
-            
-            if (millis() - lastActionTime > 100) { // Was 300, now 100ms for higher sensitivity
+            if (millis() - lastActionTime > 10) { // Very short delay for responsiveness
                 if (!editingAlarm) {
                     // Not editing: toggle alarm ON/OFF with rotary left/right (2/3)
                     if (input.rstPressed) alarmEnabled = !alarmEnabled;
                     // Enter hour set mode with OK (1) if alarm is ON
-                    else if (input.swPressed) { editingAlarm = true; editingMinute = false; }
+                    else if (input.swPressed) { editingAlarm = true; editingMinute = false; alarmEditing = true; }
                     
                 } else if (!editingMinute) {
                     // Set hour: 2/3 changes hour, 1 moves to minute set
-                    if (input.rotaryDirection == 1 && lastDirection == 0) {alarmHour = (alarmHour + 23) % 24;}
-                    else if (input.rotaryDirection == -1 && lastDirection == 0) {alarmHour = (alarmHour + 1) % 24;}
-                    else if (input.swPressed) {editingMinute = true;}
+                    if (input.rotaryDirection == 1 && lastDirection == 0) {alarmHour = (alarmHour + 1) % 24;}
+                    else if (input.rotaryDirection == -1 && lastDirection == 0) {alarmHour = (alarmHour + 23) % 24;}
+                    else if (input.swPressed) {editingMinute = true; }
                     
                 } else {
                     // Set minute: 2/3 changes minute, 1 finishes editing
-                    if (input.rotaryDirection == 1 && lastDirection == 0) {alarmMinute = (alarmMinute + 59) % 60;}
-                    else if (input.rotaryDirection == -1 && lastDirection == 0) {alarmMinute = (alarmMinute + 1) % 60;}
-                    else if (input.swPressed) { editingAlarm = false; editingMinute = false; }
+                    if (input.rotaryDirection == 1 && lastDirection == 0) {alarmMinute = (alarmMinute + 1) % 60;}
+                    else if (input.rotaryDirection == -1 && lastDirection == 0) {alarmMinute = (alarmMinute + 59) % 60;}
+                    else if (input.swPressed) { editingAlarm = false; editingMinute = false; alarmEditing = false; }
                     
                 }
                 // if (input.rstPressed) {
@@ -219,7 +292,7 @@ void interfaceLoop(const InputState& input) {
         }
 
         case MENU_SET_TIMEZONE: {
-            static int lastDirection = 0;
+            
             // Draw a rounded box for the timezone info (centered, 128x64 screen)
             int boxW = 110, boxH = 36;
             int boxX = (128 - boxW) / 2;
@@ -244,16 +317,16 @@ void interfaceLoop(const InputState& input) {
             // Footer: instructions
             display.fillRect(0, 56, 128, 8, SSD1306_BLACK);
             display.setCursor(8, 58);
-            InputState input = readUserInput();
             if (millis() - lastActionTime > 100) {
-                if (input.rstPressed) { // Up/Down
+                if (input.rstPressed) {
                     display.clearDisplay();
                     changeTimeZone();
-                    DateTime now = rtc.now();
-                    showClockPage(now);
-                    showAlarmStatus();
-                    display.display(); 
+                    showClockPage();
+                    showAlarmStatus(input);
+                    display.display();
+                    delay(1000);  // Optional: show for a moment
                 }
+
             lastDirection = input.rotaryDirection;
                 lastActionTime = millis();
                 display.display();
@@ -262,7 +335,7 @@ void interfaceLoop(const InputState& input) {
         }
 
         case MENU_SET_REGION: {
-            static int lastDirection = 0;
+           
             // City name bar at the top
             display.setTextSize(1);
             display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
@@ -328,12 +401,14 @@ void interfaceLoop(const InputState& input) {
         }
 
         case MENU_CLOCK: {
-            counter = 0; // Reset counter when entering clock menu
-            DateTime now = rtc.now();
+            display.clearDisplay();  // ✅ Clear once here
+            time_t nowTime = time(nullptr);         // Get current time from internal RTC
+            struct tm timeinfo;
+            localtime_r(&nowTime, &timeinfo);  
             display.clearDisplay();
-            showClockPage(now);
-            showAlarmStatus();
-            display.display();
+            showClockPage();       // ✅ Draw the clock face
+            showAlarmStatus(input);     // ✅ Overlay alarm icon/status with input
+            display.display();     // ✅ One final call to update the screen
             break;
         }
 
@@ -341,7 +416,7 @@ void interfaceLoop(const InputState& input) {
             // Stopwatch placeholder
             display.setTextSize(1);
             display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
-            stopWatch(); // Call the stopwatch loop function
+            stopWatch(input); // Call the stopwatch loop function with input
             break;
         }
     }

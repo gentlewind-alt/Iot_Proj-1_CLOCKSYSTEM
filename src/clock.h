@@ -29,16 +29,21 @@ extern float Cmaj7[];
 extern float G[];
 extern float Am7[];
 extern float Fmaj7[];
-extern RTC_DS1307 rtc; // RTC instance
+extern int alarmChordIndex; // Current chord index
+extern unsigned long lastAlarmNoteTime; // Last time a note was played
+extern unsigned long lastNTPSync;
+// Forward declare InputState
+struct InputState;
+
 // Function declarations
 void changeTimeZone();
-void stopWatch();
-void showAlarmStatus();
+void stopWatch(const InputState& input);
+void showAlarmStatus(const InputState& input);
 void syncRTCWithNTP();
 // Modular display functions
 void playChord(const float* chord, int len);
-void checkAndTriggerAlarm(const DateTime& now);
-void showClockPage(const DateTime& nowUtc);
+void checkAndTriggerAlarm(const tm& now);
+void showClockPage();
  // Dummy function to avoid undefined identifier error
 
 #endif

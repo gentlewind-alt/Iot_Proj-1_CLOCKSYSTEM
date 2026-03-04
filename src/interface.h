@@ -3,8 +3,6 @@
 
 #include <Adafruit_SSD1306.h>
 #include <Wire.h>
-#include <RTClib.h>
-#include <Adafruit_NeoPixel.h>
 #include <WiFi.h>
 #include <Arduino.h>
 #include <HTTPClient.h>
@@ -15,11 +13,13 @@
 #include "MPU6050.h"
 #include "I2Cdev.h"
 #include <BfButton.h>
+#include <time.h> 
+#include <AnimatedGIF.h>
+
 
 #include "clock.h"
 #include "weather.h"
-#include "emoji.h"
-#include "sensors.h"
+
 
 #define I2C_SDA         8
 #define I2C_SCL         9
@@ -38,13 +38,17 @@ extern std::string weatherRegion;
 extern bool menuselecting;
 extern bool running;
 extern bool choice;
+extern bool rotaryUsed; // Flag to indicate if rotary was used
+extern bool alarmEditing; // Flag to indicate if alarm is being edited
  // Reads rotary encoder and button states
 struct InputState {
     int rotaryDirection; // -1, 0, or 1
     bool swPressed;
     bool rstPressed;
 };
+extern AnimatedGIF gif;
 extern InputState readUserInput(); // Reads rotary encoder and button states
+#include "sensors.h"
 // Interface core
 void interfaceLoop(const InputState &input);
 // Actions
