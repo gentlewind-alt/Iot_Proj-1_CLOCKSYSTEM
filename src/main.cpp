@@ -94,20 +94,20 @@ void syncRTCWithNTP() {
   }
 }
 
-// === Get Time from ESP32 RTC or DS1307 fallback ===
+// === Get Time from NTP or DS1307 fallback ===
 bool getTimeWithFallback(struct tm &timeinfo) {
-  // Try ESP32 internal clock first (synced via NTP if available)
-  if (getLocalTime(&timeinfo)) {
+  // Try NTP first (only if WiFi is connected)
+  if (WiFi.status() == WL_CONNECTED && getLocalTime(&timeinfo, 1000)) {
     return true;
   }
 
-  // Fallback to DS1307 if ESP32 clock fails
-  Serial.println("⚠️ ESP32 local time unavailable, reading from DS1307...");
+  // Fallback to DS1307 if NTP unavailable
+  // Serial.println("⚠️ NTP unavailable, reading from DS1307...");
   DateTime now = extRTC.now();
 
   // Validate DS1307 time (sanity check: year should be >= 2024)
   if (now.year() < 2024) {
-    Serial.printf("⚠️ DS1307 has invalid time (%04d), waiting for NTP...\n", now.year());
+    //Serial.printf("⚠️ DS1307 has invalid time (%04d), waiting for NTP...\n", now.year());
     return false;
   }
 
@@ -120,9 +120,9 @@ bool getTimeWithFallback(struct tm &timeinfo) {
   timeinfo.tm_sec  = now.second();
   mktime(&timeinfo);
 
-  Serial.printf("📅 Using DS1307 Time: %04d-%02d-%02d %02d:%02d:%02d\n",
-    now.year(), now.month(), now.day(),
-    now.hour(), now.minute(), now.second());
+  // Serial.printf("📅 Using DS1307 Time: %04d-%02d-%02d %02d:%02d:%02d\n",
+  //   now.year(), now.month(), now.day(),
+  //   now.hour(), now.minute(), now.second());
 
   return true;
 }
@@ -358,6 +358,10 @@ void setup() {
 }
 
 unsigned long lastSensorLog = 0;
+unsigned long lastTimeVerifyTime = 0;
+const unsigned long TIME_VERIFY_INTERVAL = 60000;  // Verify time source every 60 seconds, not every loop
+struct tm cachedTimeinfo = {};
+
 void loop() {
     if(inIdleAnimation){
         playScheduledAnimation();
@@ -370,8 +374,16 @@ void loop() {
         return;
     }
 
+    // Get smooth current time every loop (no NTP call, just system time)
+    time_t now = time(nullptr);
     struct tm timeinfo;
-    getTimeWithFallback(timeinfo);
+    localtime_r(&now, &timeinfo);
+
+    // Occasionally verify time source is still valid (every 60 seconds)
+    if(millis() - lastTimeVerifyTime >= TIME_VERIFY_INTERVAL) {
+        getTimeWithFallback(cachedTimeinfo);  // Verify and sync if needed
+        lastTimeVerifyTime = millis();
+    }
 
     InputState currentInput = readUserInput();
 

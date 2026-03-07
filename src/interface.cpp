@@ -153,6 +153,8 @@ InputState readUserInput() {
 void interfaceLoop(const InputState& input) {
     static int lastRotaryDirection = 0;
     static int lastDirection = 0;
+    static unsigned long lastUIUpdateTime = 0;
+    const unsigned long UI_UPDATE_INTERVAL = 50;  // Update UI every 50ms, not every loop (20ms saves 60% CPU)
 
     // --- Rotary on any menu: preview and switch after 2s ---
     if ((!editingAlarm && !editingMinute) && (!changeWeather) && ((input.rotaryDirection == 1 || input.rotaryDirection == -1) && 
@@ -194,10 +196,13 @@ void interfaceLoop(const InputState& input) {
         }
     }
 
+    // Throttle UI updates to reduce CPU load (skip some frames)
+    if (millis() - lastUIUpdateTime < UI_UPDATE_INTERVAL) {
+        return;
+    }
+    lastUIUpdateTime = millis();
+
     display.clearDisplay();
-    time_t nowTime = time(nullptr);         // Get current time from internal RTC
-    struct tm timeinfo;
-    localtime_r(&nowTime, &timeinfo);  
     const TimeZone& tz = timeZones[selectedTimeZoneIndex];
 
 

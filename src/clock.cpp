@@ -93,6 +93,11 @@ void displayAlarmSettings() {
 
 // — Show clock with timezone —
 void showClockPage() {
+  static unsigned long lastUpdateTime = 0;
+  static char cachedTimeBuf[16] = "";
+  static char cachedDateBuf[16] = "";
+  const unsigned long CLOCK_UPDATE_INTERVAL = 500;  // Update clock display every 500ms, not every frame
+
   const TimeZone& tz = timeZones[selectedTimeZoneIndex];
   struct tm now;
 
@@ -105,35 +110,37 @@ void showClockPage() {
   }
 
   int offsetH = (int)tz.offsetHours;
-  int offsetM = (tz.offsetHours - offsetH) * 60;  // For fractional offsets
+  int offsetM = (tz.offsetHours - offsetH) * 60;
 
   now.tm_hour += offsetH;
   now.tm_min  += offsetM;
-  mktime(&now);  // Normalize
+  mktime(&now);
 
-  // Time string
-  char timeBuf[16];
-  snprintf(timeBuf, sizeof(timeBuf),
-           "%02d:%02d:%02d", now.tm_hour, now.tm_min, now.tm_sec);
+  // Only update display cache every 500ms (saves CPU from constant text rendering)
+  if (millis() - lastUpdateTime >= CLOCK_UPDATE_INTERVAL) {
+    lastUpdateTime = millis();
+    snprintf(cachedTimeBuf, sizeof(cachedTimeBuf),
+             "%02d:%02d:%02d", now.tm_hour, now.tm_min, now.tm_sec);
+    snprintf(cachedDateBuf, sizeof(cachedDateBuf),
+             "%02d/%02d/%04d", now.tm_mday, now.tm_mon+1, now.tm_year+1900);
+  }
 
   display.setTextSize(1);
   display.setCursor(0, 0);
   display.print(tz.name);
+  
   display.setTextSize(2);
-  int16_t x, y; uint16_t w, h;
-  display.getTextBounds(timeBuf, 0, 0, &x, &y, &w, &h);
+  int16_t x, y;
+  uint16_t w, h;
+  display.getTextBounds(cachedTimeBuf, 0, 0, &x, &y, &w, &h);
   display.setCursor((128 - w)/2, 25);
-  display.print(timeBuf);
+  display.print(cachedTimeBuf);
   display.drawLine(0, 25 + h + 2, 127, 25 + h + 2, WHITE);
 
-  // Date
-  char dateBuf[16];
-  snprintf(dateBuf, sizeof(dateBuf),
-           "%02d/%02d/%04d", now.tm_mday, now.tm_mon+1, now.tm_year+1900);
   display.setTextSize(1);
-  display.getTextBounds(dateBuf, 0, 0, &x, &y, &w, &h);
+  display.getTextBounds(cachedDateBuf, 0, 0, &x, &y, &w, &h);
   display.setCursor((128 - w)/2, 25 + h + 15);
-  display.print(dateBuf);
+  display.print(cachedDateBuf);
 }
 
 // — Show alarm ON/OFF on main UI —

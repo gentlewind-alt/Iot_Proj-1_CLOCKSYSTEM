@@ -182,7 +182,16 @@ void setupMotionSensor() {
 }
 
 long getDistanceCM() {
-  const int samples = 5;
+  static unsigned long lastMeasureTime = 0;
+  static long cachedDistance = 0;
+  
+  // Throttle distance measurement to every 100ms (not every loop iteration)
+  if (millis() - lastMeasureTime < 100) {
+    return cachedDistance;
+  }
+  lastMeasureTime = millis();
+  
+  const int samples = 3;  // Reduced from 5 to 3 samples for faster response
   long readings[samples];
   for (int i = 0; i < samples; i++) {
     digitalWrite(TRIG_PIN, LOW);
@@ -192,25 +201,38 @@ long getDistanceCM() {
     digitalWrite(TRIG_PIN, LOW);
     long duration = pulseIn(ECHO_PIN, HIGH, 30000);
     readings[i] = duration * 0.034 / 2;
-    delay(10);
+    delayMicroseconds(100);  // Reduced from 10ms to 100µs
   }
-  for (int i = 0; i < samples - 1; i++) {
-    for (int j = i + 1; j < samples; j++) {
-      if (readings[j] < readings[i]) {
-        long t = readings[i]; readings[i] = readings[j]; readings[j] = t;
-      }
-    }
+  
+  // Simple median (faster than full sort for 3 samples)
+  if (readings[0] > readings[1]) {
+    if (readings[1] > readings[2]) cachedDistance = readings[1];
+    else if (readings[0] > readings[2]) cachedDistance = readings[2];
+    else cachedDistance = readings[0];
+  } else {
+    if (readings[0] > readings[2]) cachedDistance = readings[0];
+    else if (readings[1] > readings[2]) cachedDistance = readings[2];
+    else cachedDistance = readings[1];
   }
-  return readings[samples/2];
+  
+  return cachedDistance;
 }
 
 void checkForUserActivity() {
+  static unsigned long lastActivityCheckTime = 0;
+  const unsigned long ACTIVITY_CHECK_INTERVAL = 200;  // Check every 200ms (not every loop iteration)
+  
+  // Throttle activity checks to save CPU
+  if (millis() - lastActivityCheckTime < ACTIVITY_CHECK_INTERVAL) {
+    return;
+  }
+  lastActivityCheckTime = millis();
+
   bool pirVal = digitalRead(PIR_PIN);
-  long distance = getDistanceCM();
+  long distance = getDistanceCM();  // Now throttled internally too
   bool buttonUsed = digitalRead(pinSW) == LOW || digitalRead(pinRST) == LOW;
 
   if (alarmBeeping && pirVal && distance > 0 && distance < 10) {
-    Serial.println("😴 Snooze triggered by motion <10cm!");
     alarmBeeping = false;
     snoozeUntil = millis() + SNOOZE_DURATION;
   }
@@ -218,7 +240,6 @@ void checkForUserActivity() {
   if (buttonUsed || running || alarmEditing) {
     lastMotionTime = millis();
     if (inIdleAnimation) {
-      Serial.println("✨ Exiting idle mode via rotary/button.");
       inIdleAnimation = false;
       isIdlePlaying = false;
       display.clearDisplay();
@@ -228,24 +249,20 @@ void checkForUserActivity() {
 
   if (pirVal && distance > 30 && distance < 500) {
     if (!pirState) {
-      Serial.println("🚶 Motion detected!");
       pirState = true;
     }
     lastMotionTime = millis();
     if (inIdleAnimation) {
-      Serial.println("✨ Exiting idle mode due to PIR/Ultrasonic motion.");
       inIdleAnimation = false;
       isIdlePlaying = false;
       display.clearDisplay();
       display.display();
     }
   } else if (pirState && millis() - lastMotionTime > 3000) {
-    Serial.println("🛑 PIR motion ended!");
     pirState = false;
   }
 
   if (!inIdleAnimation && (millis() - lastMotionTime > idleTimeout)) {
-    Serial.println("💤 Timeout passed. Entering idle mode.");
     inIdleAnimation = true;
     isIdlePlaying = false;
   }
