@@ -2,7 +2,6 @@
 
 extern int selectedTimeZoneIndex;
 extern Adafruit_SSD1306 display;
-AnimatedGIF gif;
 // Add this extern so main.cpp and interface.cpp share the same variable
 bool menuSelecting = false;
 int currentMenu = MENU_CLOCK; // Default to clock
@@ -258,7 +257,7 @@ void interfaceLoop(const InputState& input) {
             display.print(alarmEnabled ? "ON" : "OFF");
             display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
 
-            if (millis() - lastActionTime > 10) { // Very short delay for responsiveness
+            if (millis() - lastActionTime > 100) { // Debounce input processing
                 if (!editingAlarm) {
                     // Not editing: toggle alarm ON/OFF with rotary left/right (2/3)
                     if (input.rstPressed) alarmEnabled = !alarmEnabled;
@@ -278,16 +277,10 @@ void interfaceLoop(const InputState& input) {
                     else if (input.swPressed) { editingAlarm = false; editingMinute = false; alarmEditing = false; }
                     
                 }
-                // if (input.rstPressed) {
-                //     Serial.println("🔄 Resetting...");
-                //     menuSelecting = true; // Go back to menu selection
-                //     delay(100); // Debounce
-                //     return;
-                // }
                 lastDirection = input.rotaryDirection;
                 lastActionTime = millis();
-                display.display();
             }
+            display.display();
             break;
         }
 
@@ -317,20 +310,14 @@ void interfaceLoop(const InputState& input) {
             // Footer: instructions
             display.fillRect(0, 56, 128, 8, SSD1306_BLACK);
             display.setCursor(8, 58);
-            if (millis() - lastActionTime > 100) {
+            if (millis() - lastActionTime > 300) {
                 if (input.rstPressed) {
-                    display.clearDisplay();
                     changeTimeZone();
-                    showClockPage();
-                    showAlarmStatus(input);
-                    display.display();
-                    delay(1000);  // Optional: show for a moment
                 }
-
-            lastDirection = input.rotaryDirection;
+                lastDirection = input.rotaryDirection;
                 lastActionTime = millis();
-                display.display();
             }
+            display.display();
             break;
         }
 
@@ -401,11 +388,6 @@ void interfaceLoop(const InputState& input) {
         }
 
         case MENU_CLOCK: {
-            display.clearDisplay();  // ✅ Clear once here
-            time_t nowTime = time(nullptr);         // Get current time from internal RTC
-            struct tm timeinfo;
-            localtime_r(&nowTime, &timeinfo);  
-            display.clearDisplay();
             showClockPage();       // ✅ Draw the clock face
             showAlarmStatus(input);     // ✅ Overlay alarm icon/status with input
             display.display();     // ✅ One final call to update the screen

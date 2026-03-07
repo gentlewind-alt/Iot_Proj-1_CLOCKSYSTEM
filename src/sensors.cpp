@@ -29,59 +29,153 @@ const float motionThreshold = 2.5;
 #define SCREEN_HEIGHT 64
 #define FRAME_SIZE (SCREEN_WIDTH * SCREEN_HEIGHT / 8)
 
-// Packed animation player
-static bool readPackedHeader(File &f, uint16_t &w, uint16_t &h, uint32_t &count) {
-  char magic[8];
-  if (f.readBytes(magic, 8) != 8) return false;
-  if (memcmp(magic, "BINPACK\0", 8) != 0) return false;
-  if (f.readBytes((char*)&w, 2) != 2) return false;
-  if (f.readBytes((char*)&h, 2) != 2) return false;
-  if (f.readBytes((char*)&count, 4) != 4) return false;
-  return true;
-}
-
-void playPackedAnimation(const char* path, uint16_t frameDelayMs) {
-  if (!SPIFFS.exists(path)) {
-    Serial.printf("❌ Animation file missing: %s\n", path);
-    return;
-  }
-  File f = SPIFFS.open(path, "r");
-  if (!f) {
-    Serial.printf("❌ Failed to open: %s\n", path);
-    return;
-  }
-  uint16_t w = 0, h = 0; uint32_t count = 0;
-  if (!readPackedHeader(f, w, h, count)) {
-    Serial.printf("❌ Invalid packed animation: %s\n", path);
-    f.close();
-    return;
-  }
-  const size_t bytesPerFrame = (w * h) / 8;
-  static uint8_t frame[FRAME_SIZE];
-  for (uint32_t i = 0; i < count && inIdleAnimation; i++) {
-    size_t n = f.read(frame, bytesPerFrame);
-    if (n != bytesPerFrame) break;
-    display.clearDisplay();
-    display.drawBitmap(0, 0, frame, SCREEN_WIDTH, SCREEN_HEIGHT, 1);
-    display.display();
-    delay(frameDelayMs);
-    checkForUserActivity();
-  }
-  f.close();
-}
-
-// Idle animation list
-const char* idleAnimations[] = {
-  "/happy_2.pbin", "/demon_slayer.pbin", "/yawn.pbin", "/rain.pbin", "/cry2.pbin", "/love.pbin", "/cry.pbin",
-  "/rainbow.pbin", "/sakura.pbin", "/sneeze_2.pbin", "/xi_khoi.pbin", "/squint.pbin", "/angry2.pbin",
-  "/dizzy.pbin", "/headlight_ex.pbin", "/smile.pbin", "/up_size_down.pbin", "/sung_nuoc_2.pbin", "/angry3.pbin",
-  "/scared.pbin", "/UwU.pbin", "/police.pbin", "/devil_eyes.pbin", "/look_around.pbin", "/neon.pbin",
-  "/thong_long.pbin", "/egg.pbin", "/thu_nho.pbin", "/music.pbin", "/surprise_look.pbin", "/smirk.pbin",
-  "/gian_du.pbin", "/dasai2.pbin", "/love2.pbin", "/samurai.pbin", "/yakura.pbin", "/devil.pbin",
-  "/xi_lua.pbin", "/keep_it_up.pbin", "/nervous_laugh.pbin", "/sleepy.pbin", "/wheels.pbin", "/mochi.pbin",
-  "/angry.pbin", "/pong.pbin", "/turbo.pbin", "/headlight.pbin", "/toc_do.pbin", "/devil_2.pbin", "star.pbin"
+// Animation metadata: {name, number of frames, delay between frames in ms}
+struct AnimationFrame {
+  const char* name;
+  int frameCount;      // Will be updated dynamically
+  uint16_t delayMs;
 };
 
+// Animation definitions with initial frame counts (will be overwritten)
+AnimationFrame idleAnimations[] = {
+  {"happy_2", 0, 80},
+  {"demon_slayer", 0, 80},
+  {"yawn", 0, 80},
+  {"rain", 0, 80},
+  {"cry2", 0, 80},
+  {"love", 0, 80},
+  {"cry", 0, 80},
+  {"rainbow", 0, 80},
+  {"sakura", 0, 80},
+  {"sneeze_2", 0, 80},
+  {"xi_khoi", 0, 80},
+  {"squint", 0, 80},
+  {"angry2", 0, 80},
+  {"dizzy", 0, 80},
+  {"headlight_ex", 0, 80},
+  {"smile", 0, 80},
+  {"up_size_down", 0, 80},
+  {"sung_nuoc_2", 0, 80},
+  {"angry3", 0, 80},
+  {"scared", 0, 80},
+  {"UwU", 0, 80},
+  {"police", 0, 80},
+  {"devil_eyes", 0, 80},
+  {"look_around", 0, 80},
+  {"neon", 0, 80},
+  {"thong_long", 0, 80},
+  {"egg", 0, 80},
+  {"thu_nho", 0, 80},
+  {"music", 0, 80},
+  {"surprise_look", 0, 80},
+  {"smirk", 0, 80},
+  {"gian_du", 0, 80},
+  {"dasai2", 0, 80},
+  {"love2", 0, 80},
+  {"samurai", 0, 80},
+  {"yakura", 0, 80},
+  {"devil", 0, 80},
+  {"xi_lua", 0, 80},
+  {"keep_it_up", 0, 80},
+  {"nervous_laugh", 0, 80},
+  {"sleepy", 0, 80},
+  {"wheels", 0, 80},
+  {"mochi", 0, 80},
+  {"angry", 0, 80},
+  {"pong", 0, 80},
+  {"turbo", 0, 80},
+  {"headlight", 0, 80},
+  {"toc_do", 0, 80},
+  {"devil_2", 0, 80},
+  {"star", 0, 80}
+};
+
+const int totalAnimations = sizeof(idleAnimations) / sizeof(idleAnimations[0]);
+
+// Count .pbin files in a folder to determine frame count
+// === DISABLED for Wokwi simulation (no SPIFFS support) ===
+int countFramesInFolder(const char* folderName) {
+  // char folderPath[64];
+  // snprintf(folderPath, sizeof(folderPath), "/data/%s", folderName);
+  // 
+  // File folder = SPIFFS.open(folderPath);
+  // if (!folder || !folder.isDirectory()) {
+  //   Serial.printf("⚠️ Folder not found: %s\n", folderPath);
+  //   return 0;
+  // }
+  // 
+  // int frameCount = 0;
+  // File file = folder.openNextFile();
+  // while (file) {
+  //   if (!file.isDirectory()) {
+  //     frameCount++;
+  //   }
+  //   file = folder.openNextFile();
+  // }
+  // folder.close();
+  
+  return 0;  // Return 0 frames for simulation
+}
+
+// Scan all animation folders and update frame counts dynamically
+// === DISABLED for Wokwi simulation (no SPIFFS support) ===
+void initializeAnimationFrameCounts() {
+  // Serial.println("\n🎬 Scanning animation folders...");
+  // for (int i = 0; i < totalAnimations; i++) {
+  //   int frames = countFramesInFolder(idleAnimations[i].name);
+  //   idleAnimations[i].frameCount = frames;
+  //   Serial.printf("  %s: %d frames\n", idleAnimations[i].name, frames);
+  // }
+  // Serial.println("✅ Animation frame counts updated dynamically\n");
+  Serial.println("⚠️ Animation frame counts disabled (SPIFFS not available in simulation)");
+}
+
+// Load and play animation from frame folder (e.g., /data/angry/)
+// === DISABLED for Wokwi simulation (no SPIFFS support) ===
+void playAnimationFromFrames(const char* folderName, int frameCount, uint16_t frameDelayMs) {
+  // char framePath[64];
+  // static uint8_t frame[FRAME_SIZE];
+  // 
+  // Serial.printf("🎬 Playing animation: %s (%d frames)\n", folderName, frameCount);
+  // 
+  // for (int i = 0; i < frameCount && inIdleAnimation; i++) {
+  //   // Build path: /data/angry/0.pbin, /data/angry/1.pbin, etc.
+  //   snprintf(framePath, sizeof(framePath), "/data/%s/%d.pbin", folderName, i);
+  //   
+  //   if (!SPIFFS.exists(framePath)) {
+  //     Serial.printf("❌ Frame missing: %s\n", framePath);
+  //     break;
+  //   }
+  //   
+  //   File f = SPIFFS.open(framePath, "r");
+  //   if (!f) {
+  //     Serial.printf("❌ Failed to open frame: %s\n", framePath);
+  //     break;
+  //   }
+  //   
+  //   // Read frame data (should be FRAME_SIZE bytes = 1024 for 128x64 display)
+  //   size_t bytesRead = f.read(frame, FRAME_SIZE);
+  //   f.close();
+  //   
+  //   if (bytesRead != FRAME_SIZE) {
+  //     Serial.printf("⚠️ Frame %d incomplete: read %d bytes, expected %d\n", i, bytesRead, FRAME_SIZE);
+  //     continue;
+  //   }
+  //   
+  //   // Render frame
+  //   display.clearDisplay();
+  //   display.drawBitmap(0, 0, frame, SCREEN_WIDTH, SCREEN_HEIGHT, 1);
+  //   display.display();
+  //   
+  //   delay(frameDelayMs);
+  //   checkForUserActivity();
+  // }
+  
+  // Stub for simulation
+  Serial.printf("⚠️ Animation disabled: %s (SPIFFS not available in simulation)\n", folderName);
+}
+
+// Configure PIR motion sensor pin and reset timers
 void setupMotionSensor() {
   pinMode(PIR_PIN, INPUT);
   lastMotionTime = millis();
@@ -158,23 +252,40 @@ void checkForUserActivity() {
 }
 
 void playRandomIdleAnimation() {
-  int total = sizeof(idleAnimations) / sizeof(idleAnimations[0]);
-  if (total == 0) return;
-  srand(millis());
-  int choice = rand() % total;
-  playPackedAnimation(idleAnimations[choice], 80);
+  // === DISABLED for Wokwi simulation ===
+  // if (totalAnimations == 0) return;
+  // srand(millis());
+  // int choice = rand() % totalAnimations;
+  // const AnimationFrame& anim = idleAnimations[choice];
+  // if (anim.frameCount > 0) {
+  //   playAnimationFromFrames(anim.name, anim.frameCount, anim.delayMs);
+  // }
+  Serial.println("⚠️ Random animation disabled (SPIFFS not available)");
 }
 
 void playScheduledAnimation() {
   checkForUserActivity();
   if (!inIdleAnimation || shaking) return;
   if (!isIdlePlaying) {
-    Serial.println("💤 Entering idle animation loop");
+    Serial.println("💤 Entering idle animation loop (animations disabled in simulation)");
     isIdlePlaying = true;
   }
-  int animIndex = random(0, sizeof(idleAnimations) / sizeof(idleAnimations[0]));
-  Serial.printf("🎞 Playing idle animation: %s\n", idleAnimations[animIndex]);
-  playPackedAnimation(idleAnimations[animIndex], 80);
-  Serial.println("✅ Animation cycle done");
+  // === DISABLED for Wokwi simulation ===
+  // int animIndex = random(0, totalAnimations);
+  // const AnimationFrame& anim = idleAnimations[animIndex];
+  // if (anim.frameCount > 0) {
+  //   Serial.printf("🎞 Playing idle animation: %s\n", anim.name);
+  //   playAnimationFromFrames(anim.name, anim.frameCount, anim.delayMs);
+  //   Serial.println("✅ Animation cycle done");
+  // }
+  
+  // Just display a blank screen in simulation
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(20, 28);
+  display.println("Idle Mode");
+  display.display();
+  delay(100);
+  
   isIdlePlaying = false;
 }

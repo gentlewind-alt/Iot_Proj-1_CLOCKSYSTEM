@@ -3,9 +3,7 @@
 #include "esp_wpa2.h"
 #include <RTClib.h>   // ✅ DS1307 RTC
 #include <Wire.h>
-#include <vector>
 #include "angry.h"
-#include <algorithm>
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 // #define FRAME_SIZE (SCREEN_WIDTH * SCREEN_HEIGHT / 8)
@@ -18,6 +16,7 @@ extern unsigned long alarmStartTime;
 extern volatile bool alarmBeeping;
 
 bool idleBlockedForAlarm = false;
+bool ntpSyncedOnce = false;
 uint8_t ucFrameBuffer[(128*64) + ((128 * 64)/8)];
 
 const int alarmChordCount = 4;
@@ -52,11 +51,17 @@ extern const size_t _31_len;
 void initRTC() {
   if (!extRTC.begin()) {
     Serial.println("❌ DS1307 not found");
+    while(1) delay(100);
   } else {
     Serial.println("✅ DS1307 RTC OK");
     if (!extRTC.isrunning()) {
       Serial.println("🕒 DS1307 not running, setting to compile time...");
       extRTC.adjust(DateTime(F(__DATE__), F(__TIME__)));
+    } else {
+      DateTime rtcTime = extRTC.now();
+      Serial.printf("📅 DS1307 Current Time: %04d-%02d-%02d %02d:%02d:%02d\n",
+        rtcTime.year(), rtcTime.month(), rtcTime.day(),
+        rtcTime.hour(), rtcTime.minute(), rtcTime.second());
     }
   }
 }
@@ -67,9 +72,11 @@ void syncRTCWithNTP() {
 
   struct tm timeinfo;
   if (getLocalTime(&timeinfo, 5000)) {
-    Serial.printf("✅ NTP Time: %02d:%02d:%02d\n", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+    Serial.printf("✅ NTP Sync Success: %04d-%02d-%02d %02d:%02d:%02d\n",
+      timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
+      timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
 
-    // Save to DS1307
+    // Save to DS1307 for persistence
     extRTC.adjust(DateTime(
       timeinfo.tm_year + 1900,
       timeinfo.tm_mon + 1,
@@ -79,18 +86,32 @@ void syncRTCWithNTP() {
       timeinfo.tm_sec
     ));
 
+    ntpSyncedOnce = true;
     lastNTPSync = millis();
+    Serial.println("💾 Time saved to DS1307 RTC");
   } else {
-    Serial.println("❌ NTP sync failed");
+    Serial.println("❌ NTP sync failed - will use DS1307 fallback");
   }
 }
 
 // === Get Time from ESP32 RTC or DS1307 fallback ===
 bool getTimeWithFallback(struct tm &timeinfo) {
+  // Try ESP32 internal clock first (synced via NTP if available)
   if (getLocalTime(&timeinfo)) {
     return true;
   }
+
+  // Fallback to DS1307 if ESP32 clock fails
+  Serial.println("⚠️ ESP32 local time unavailable, reading from DS1307...");
   DateTime now = extRTC.now();
+
+  // Validate DS1307 time (sanity check: year should be >= 2024)
+  if (now.year() < 2024) {
+    Serial.printf("⚠️ DS1307 has invalid time (%04d), waiting for NTP...\n", now.year());
+    return false;
+  }
+
+  // Convert DS1307 time to struct tm
   timeinfo.tm_year = now.year() - 1900;
   timeinfo.tm_mon  = now.month() - 1;
   timeinfo.tm_mday = now.day();
@@ -98,6 +119,11 @@ bool getTimeWithFallback(struct tm &timeinfo) {
   timeinfo.tm_min  = now.minute();
   timeinfo.tm_sec  = now.second();
   mktime(&timeinfo);
+
+  Serial.printf("📅 Using DS1307 Time: %04d-%02d-%02d %02d:%02d:%02d\n",
+    now.year(), now.month(), now.day(),
+    now.hour(), now.minute(), now.second());
+
   return true;
 }
 
@@ -150,30 +176,30 @@ bool connectInstitutionWiFi() {
 }
 
 // === SPIFFS / Data directory helpers ===
-// void initSPIFFS() {
-//     if (!SPIFFS.begin(true)) { // format if missing
-//         Serial.println("❌ SPIFFS mount failed!");
-//         while(1) delay(10);
-//     }
-//     Serial.println("✅ SPIFFS mounted successfully.");
-// }
+void initSPIFFS() {
+    if (!SPIFFS.begin(true)) {
+        Serial.println("❌ SPIFFS mount failed!");
+        while(1) delay(10);
+    }
+    Serial.println("✅ SPIFFS mounted successfully.");
+}
 
-// void listFiles(const char* path = "/") {
-//     Serial.printf("📂 Listing files in: %s\n", path);
-//     File root = SPIFFS.open(path);
-//     if (!root || !root.isDirectory()) {
-//         Serial.println("❌ Failed to open directory");
-//         return;
-//     }
-//     File file = root.openNextFile();
-//     while(file) {
-//         Serial.print("  - ");
-//         Serial.print(file.name());
-//         Serial.print("  \t");
-//         Serial.println(file.size());
-//         file = root.openNextFile();
-//     }
-// }
+void listFiles(const char* path = "/") {
+    Serial.printf("📂 Listing files in: %s\n", path);
+    File root = SPIFFS.open(path);
+    if (!root || !root.isDirectory()) {
+        Serial.println("❌ Failed to open directory");
+        return;
+    }
+    File file = root.openNextFile();
+    while(file) {
+        Serial.print("  - ");
+        Serial.print(file.name());
+        Serial.print("  \t");
+        Serial.println(file.size());
+        file = root.openNextFile();
+    }
+}
 
 // bool readFile(const char* path, uint8_t* buffer, size_t bufSize, size_t &readBytes) {
 //     File f = SPIFFS.open(path, "r");
@@ -246,9 +272,14 @@ void setup() {
     Serial.begin(115200);
     delay(1000);
 
-    // // Mount SPIFFS
+    // === SPIFFS disabled for Wokwi simulation (no SPIFFS support) ===
+    // Mount SPIFFS first
     // initSPIFFS();
+    // Serial.println("\n📂 Animation files available:");
     // listFiles("/data");
+    // 
+    // // Initialize animation frame counts dynamically by scanning folders
+    // initializeAnimationFrameCounts();
 
     // Display setup
     display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
@@ -257,13 +288,38 @@ void setup() {
     Wire.begin(I2C_SDA, I2C_SCL);
     initRTC();
 
-    // WiFi
-    bool wifiConnected = false;
-    if (connectPersonalWiFi()) wifiConnected = true;
-    else if (connectInstitutionWiFi()) wifiConnected = true;
+    // Prepare motion sensor for idle detection
+    setupMotionSensor();
 
-    if(wifiConnected) syncRTCWithNTP();
-    else Serial.println("📴 No WiFi, using DS1307 fallback");
+    // WiFi & NTP Sync
+    bool wifiConnected = false;
+    if (connectPersonalWiFi()) {
+        wifiConnected = true;
+    } else if (connectInstitutionWiFi()) {
+        wifiConnected = true;
+    }
+
+    if (wifiConnected) {
+        syncRTCWithNTP();
+        if (!ntpSyncedOnce) {
+            Serial.println("⚠️ NTP sync failed on startup, DS1307 will be used for time");
+        }
+    } else {
+        Serial.println("📴 No WiFi available - using DS1307 RTC for time");
+    }
+
+    // Verify we have valid time from somewhere
+    struct tm testTime;
+    if (!getTimeWithFallback(testTime)) {
+        Serial.println("❌ CRITICAL: No valid time source available!");
+        display.clearDisplay();
+        display.setTextSize(1);
+        display.setCursor(0, 0);
+        display.println("Time Error:");
+        display.println("No valid RTC");
+        display.display();
+        delay(2000);
+    }
 
     // Boot animation
     playAnimation();
@@ -343,7 +399,6 @@ void loop() {
         }
 
         checkAndTriggerAlarm(timeinfo);
-        showClockPage();
     }
 
     if(WiFi.status()==WL_CONNECTED && millis()-lastNTPSync>ntpSyncInterval){

@@ -1,7 +1,5 @@
 #include "clock.h"
 #include "interface.h"
-#include <HTTPClient.h>
-#include <ArduinoJson.h>
 #include <time.h>
 
 // We will use getTimeWithFallback() from main.cpp

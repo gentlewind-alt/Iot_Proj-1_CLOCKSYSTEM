@@ -12,9 +12,7 @@
 #include <Adafruit_Sensor.h>
 #include "MPU6050.h"
 #include "I2Cdev.h"
-#include <BfButton.h>
-#include <time.h> 
-#include <AnimatedGIF.h>
+#include <time.h>
 
 
 #include "clock.h"
@@ -46,7 +44,6 @@ struct InputState {
     bool swPressed;
     bool rstPressed;
 };
-extern AnimatedGIF gif;
 extern InputState readUserInput(); // Reads rotary encoder and button states
 #include "sensors.h"
 // Interface core

@@ -30,5 +30,6 @@ void setupMotionSensor();
 long getDistanceCM();
 void checkForUserActivity();
 void playScheduledAnimation();
+void initializeAnimationFrameCounts();  // Dynamically count frames in animation folders
 
 #endif
