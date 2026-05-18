@@ -1,0 +1,2 @@
+check the NO in weather menu
+add animations

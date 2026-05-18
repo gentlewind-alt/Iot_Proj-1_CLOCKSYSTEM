@@ -1,9 +1,8 @@
 #include "interface.h"
 
-extern int selectedTimeZoneIndex;
 extern Adafruit_SSD1306 display;
 // Add this extern so main.cpp and interface.cpp share the same variable
-bool menuSelecting = false;
+bool menuselecting = false;
 int currentMenu = MENU_CLOCK; // Default to clock
 static int selectedMenuIndex = MENU_CLOCK;
 static int lastMenu = -1; // Track the last menu for submenu logic
@@ -18,7 +17,7 @@ static bool editingMinute = false;
 bool alarmEditing = false;
 static unsigned long lastRtcRead = 0;
 static DateTime now;
-bool choice = false;
+bool menuChoice = false;
 bool rotaryUsed = false; 
 volatile int counter = 0; // Rotary encoder counter
 unsigned long menuEntryTime = 0; // Add near the top, outside any function
@@ -43,9 +42,9 @@ const char* getMenuName(int index) {
   switch (index) {
     case MENU_CLOCK: return "Clock";
     case MENU_ALARM: return "Alarm";
-    case MENU_SET_REGION: return "Weather";
     case MENU_STOPWATCH: return "Stopwatch";
-    case MENU_SET_TIMEZONE: return "Timezone";
+    case MENU_DISTANCE: return "Distance";      // NEW: Distance sensor
+    case MENU_ANGLE: return "Level";            // NEW: Angle/level sensor
     default: return "Unknown";
   }
 }
@@ -154,10 +153,10 @@ void interfaceLoop(const InputState& input) {
     static int lastRotaryDirection = 0;
     static int lastDirection = 0;
     static unsigned long lastUIUpdateTime = 0;
-    const unsigned long UI_UPDATE_INTERVAL = 50;  // Update UI every 50ms, not every loop (20ms saves 60% CPU)
+    const unsigned long UI_UPDATE_INTERVAL = 50;  // Update display every 50ms, not input processing
 
-    // --- Rotary on any menu: preview and switch after 2s ---
-    if ((!editingAlarm && !editingMinute) && (!changeWeather) && ((input.rotaryDirection == 1 || input.rotaryDirection == -1) && 
+    // --- Rotary on any menu: preview and switch after 2s (ALWAYS process, never throttle) ---
+    if ((!editingAlarm && !editingMinute) && ((input.rotaryDirection == 1 || input.rotaryDirection == -1) && 
         lastRotaryDirection == 0) && (millis() - lastRotaryActionTime > rotaryDebounceDelay)){
         // Calculate new menu index
         int newIndex = currentMenu;
@@ -196,37 +195,20 @@ void interfaceLoop(const InputState& input) {
         }
     }
 
-    // Throttle UI updates to reduce CPU load (skip some frames)
-    if (millis() - lastUIUpdateTime < UI_UPDATE_INTERVAL) {
-        return;
+    // Throttle DISPLAY rendering only (not input processing)
+    static bool shouldRender = true;
+    if (millis() - lastUIUpdateTime >= UI_UPDATE_INTERVAL) {
+        lastUIUpdateTime = millis();
+        shouldRender = true;
+    } else {
+        shouldRender = false;
     }
-    lastUIUpdateTime = millis();
 
     display.clearDisplay();
-    const TimeZone& tz = timeZones[selectedTimeZoneIndex];
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    
 
     switch (currentMenu) {
         case MENU_ALARM: {
-            bool inIdleAnimation = false; // Reset idle animation state
+            bool inIdleAnimation = false;
             // Draw a rounded box for the alarm time (centered, 128x64 screen)
             int boxX = 10, boxY = 8, boxW = 108, boxH = 48;
             display.drawRoundRect(boxX, boxY, boxW, boxH, 8, SSD1306_WHITE);
@@ -262,140 +244,69 @@ void interfaceLoop(const InputState& input) {
             display.print(alarmEnabled ? "ON" : "OFF");
             display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
 
-            if (millis() - lastActionTime > 100) { // Debounce input processing
+            // Process input (NOT throttled - always responsive)
+            if (millis() - lastActionTime > 100) {
                 if (!editingAlarm) {
-                    // Not editing: toggle alarm ON/OFF with rotary left/right (2/3)
-                    if (input.rstPressed) alarmEnabled = !alarmEnabled;
-                    // Enter hour set mode with OK (1) if alarm is ON
-                    else if (input.swPressed) { editingAlarm = true; editingMinute = false; alarmEditing = true; }
-                    
+                    // Not editing: toggle alarm ON/OFF with RST, enter hour set mode with SW
+                    if (input.rstPressed) {
+                        alarmEnabled = !alarmEnabled;
+                        lastActionTime = millis();
+                    }
+                    else if (input.swPressed) {
+                        editingAlarm = true;
+                        editingMinute = false;
+                        alarmEditing = true;
+                        alarmEnabled = false; // Safeguard: turn off alarm while editing
+                        lastActionTime = millis();
+                    }
                 } else if (!editingMinute) {
-                    // Set hour: 2/3 changes hour, 1 moves to minute set
-                    if (input.rotaryDirection == 1 && lastDirection == 0) {alarmHour = (alarmHour + 1) % 24;}
-                    else if (input.rotaryDirection == -1 && lastDirection == 0) {alarmHour = (alarmHour + 23) % 24;}
-                    else if (input.swPressed) {editingMinute = true; }
-                    
+                    // Set hour: rotary changes hour, SW moves to minute set
+                    if (input.rotaryDirection == 1 && lastDirection == 0) {
+                        alarmHour = (alarmHour + 1) % 24;
+                        lastActionTime = millis();
+                    }
+                    else if (input.rotaryDirection == -1 && lastDirection == 0) {
+                        alarmHour = (alarmHour + 23) % 24;
+                        lastActionTime = millis();
+                    }
+                    else if (input.swPressed) {
+                        editingMinute = true;
+                        lastActionTime = millis();
+                    }
                 } else {
-                    // Set minute: 2/3 changes minute, 1 finishes editing
-                    if (input.rotaryDirection == 1 && lastDirection == 0) {alarmMinute = (alarmMinute + 1) % 60;}
-                    else if (input.rotaryDirection == -1 && lastDirection == 0) {alarmMinute = (alarmMinute + 59) % 60;}
-                    else if (input.swPressed) { editingAlarm = false; editingMinute = false; alarmEditing = false; }
-                    
+                    // Set minute: rotary changes minute, SW finishes editing
+                    if (input.rotaryDirection == 1 && lastDirection == 0) {
+                        alarmMinute = (alarmMinute + 1) % 60;
+                        lastActionTime = millis();
+                    }
+                    else if (input.rotaryDirection == -1 && lastDirection == 0) {
+                        alarmMinute = (alarmMinute + 59) % 60;
+                        lastActionTime = millis();
+                    }
+                    else if (input.swPressed) {
+                        editingAlarm = false;
+                        editingMinute = false;
+                        alarmEditing = false;
+                        alarmEnabled = true; // Automatically turn ON after setting time
+                        lastActionTime = millis();
+                    }
                 }
                 lastDirection = input.rotaryDirection;
-                lastActionTime = millis();
             }
-            display.display();
-            break;
-        }
-
-        case MENU_SET_TIMEZONE: {
             
-            // Draw a rounded box for the timezone info (centered, 128x64 screen)
-            int boxW = 110, boxH = 36;
-            int boxX = (128 - boxW) / 2;
-            int boxY = (64 - boxH) / 2;
-            display.drawRoundRect(boxX, boxY, boxW, boxH, 8, SSD1306_WHITE);
-
-            // Format timezone string, truncate if needed to fit
-            char offsetStr[8];
-            snprintf(offsetStr, sizeof(offsetStr), "%+.2f", tz.offsetHours);
-            std::string tzStr = std::string(tz.name) + " (UTC" + offsetStr + ")";
-            if (tzStr.length() > 18) tzStr = tzStr.substr(0, 18);
-
-            // Display timezone string inside the box, centered
-            display.setTextSize(2);
-            int labelX = boxX + (boxW - (tzStr.length() * 12) / 2) / 2;
-            int labelY = boxY + 10;
-            display.setCursor(labelX, labelY);
-            display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
-            display.print(tzStr.c_str());
-            display.setTextSize(1);
-
-            // Footer: instructions
-            display.fillRect(0, 56, 128, 8, SSD1306_BLACK);
-            display.setCursor(8, 58);
-            if (millis() - lastActionTime > 300) {
-                if (input.rstPressed) {
-                    changeTimeZone();
-                }
-                lastDirection = input.rotaryDirection;
-                lastActionTime = millis();
+            if (shouldRender) {
+                display.display();
             }
-            display.display();
-            break;
-        }
-
-        case MENU_SET_REGION: {
-           
-            // City name bar at the top
-            display.setTextSize(1);
-            display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
-            display.fillRect(0, 0, 128, 12, SSD1306_BLACK);
-            display.drawRect(0, 0, 128, 12, SSD1306_WHITE);
-            if (input.rstPressed){
-                changeWeather = !changeWeather;               
-                    changeWeatherRegion();
-                    display.clearDisplay();
-                    display.setCursor(0, 0);
-                    display.print("Fetching weather...");
-                    display.display();
-            }       
-            display.clearDisplay();
-
-            // Show the selected region name
-            display.setCursor(4, 2);
-            display.print(cityList[selectedCityIndex]);
-
-            // Weather info box
-            int boxW = 120, boxH = 24;
-            int boxX = (128 - boxW) / 2;
-            int boxY = 20;
-            display.drawRoundRect(boxX, boxY, boxW, boxH, 6, SSD1306_WHITE);
-
-            // Weather icon (left side of box)
-            int iconX = boxX + 4;
-            int iconY = boxY + 4;
-            if (currentWeather.find("cloud") != std::string::npos || currentWeather.find("Cloud") != std::string::npos) {
-                display.fillCircle(iconX + 8, iconY + 8, 7, SSD1306_WHITE);
-                display.fillCircle(iconX + 16, iconY + 10, 5, SSD1306_WHITE);
-                display.fillRect(iconX + 8, iconY + 10, 10, 6, SSD1306_WHITE);
-            } else {
-                display.drawCircle(iconX + 10, iconY + 10, 7, SSD1306_WHITE);
-                for (int i = 0; i < 8; ++i) {
-                    float angle = i * 3.14159 / 4;
-                    int x1 = iconX + 10 + cos(angle) * 9;
-                    int y1 = iconY + 10 + sin(angle) * 9;
-                    int x2 = iconX + 10 + cos(angle) * 13;
-                    int y2 = iconY + 10 + sin(angle) * 13;
-                    display.drawLine(x1, y1, x2, y2, SSD1306_WHITE);
-                }
-            }
-
-            // Weather string, scaled to fit one line (max 16 chars at size 1, 8 at size 2)
-            std::string weatherShort = currentWeather.substr(0, 16);
-            display.setTextSize(1);
-            display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
-            int textX = boxX + 28;
-            int textY = boxY + 7;
-            display.setCursor(textX, textY);
-            display.print(weatherShort.c_str());
-
-            // Footer: hint for next city
-            display.setTextColor(SSD1306_WHITE, SSD1306_BLACK);
-            display.fillRect(0, 56, 128, 8, SSD1306_BLACK);
-            display.setCursor(8, 52);
-            display.print(changeWeather ? "YES" : "NO");
-            lastDirection = input.rotaryDirection;
-            lastActionTime = millis();
-            display.display();
             break;
         }
 
         case MENU_CLOCK: {
             showClockPage();       // ✅ Draw the clock face
-            showAlarmStatus(input);     // ✅ Overlay alarm icon/status with input
-            display.display();     // ✅ One final call to update the screen
+            showAlarmStatus(input);     // ✅ Overlay alarm icon/status with input (input processing in there)
+            
+            if (shouldRender) {
+                display.display();  // ✅ Only render if throttle window elapsed
+            }
             break;
         }
 
@@ -406,14 +317,46 @@ void interfaceLoop(const InputState& input) {
             stopWatch(input); // Call the stopwatch loop function with input
             break;
         }
-    }
 
-    // --- Allow Going Back to Menu ---
-    // if (millis() - lastActionTime > 500) {
-    //     if (input.swPressed) {  // Use 6 or any other code for "back to menu"
-    //         menuSelecting = true;
-    //     }
-    //     lastActionTime = millis();
-    // }
+        case MENU_DISTANCE: {
+            // === NEW: Distance Sensor Widget (Phase 2) ===
+            if (distanceWidget) {
+                distanceWidget->render();
+            } else {
+                display.clearDisplay();
+                display.setTextSize(1);
+                display.setCursor(10, 25);
+                display.println("Distance Sensor");
+                display.setCursor(20, 35);
+                display.println("Not Available");
+                display.display();
+            }
+            break;
+        }
+
+        case MENU_ANGLE: {
+            // === NEW: Angle/Level Sensor Widget (Phase 2) ===
+            static unsigned long lastDebug = 0;
+            if (millis() - lastDebug > 5000) {
+                Serial.printf("🔍 UI Angle Check: Widget=%p, Sensor=%p\n", angleWidget, levelSensor);
+                lastDebug = millis();
+            }
+
+            if (angleWidget && levelSensor) {
+                angleWidget->render();
+            } else {
+                display.clearDisplay();
+                display.setTextSize(1);
+                display.setCursor(10, 20);
+                display.println("Level Sensor Error:");
+                if (!angleWidget) display.println("- No Widget");
+                if (!levelSensor) display.println("- No Sensor");
+                display.setCursor(10, 45);
+                display.println("Check Serial Log");
+                display.display();
+            }
+            break;
+        }
+    }
 }
 

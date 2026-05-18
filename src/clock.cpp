@@ -5,15 +5,6 @@
 // We will use getTimeWithFallback() from main.cpp
 extern bool getTimeWithFallback(struct tm &timeinfo);
 
-// — Timezone definitions —
-const TimeZone timeZones[] = {
-  {"IST",  +5.5}, {"UTC",   0.0}, {"PST", -13.5}, {"MST", -12.5},
-  {"CST", -11.5}, {"EST", -10.5}, {"GMT",  -5.5}, {"CET",  -4.5},
-  {"EET",  -3.5}, {"MSK",  -2.5}, {"CST(China)", 2.5}, {"JST",  3.5},
-  {"AEST", 4.5}, {"AEDT",  5.5}, {"NZST",  6.5},
-};
-const int tzCount = sizeof(timeZones) / sizeof(timeZones[0]);
-
 // — Musical chords —
 float Cmaj7[] = {261.63, 329.63, 392.00, 493.88};
 float G[]     = {196.00, 246.94, 293.66};
@@ -27,8 +18,6 @@ int     alarmMinute       = 33;
 volatile bool alarmBeeping = false;
 unsigned long snoozeUntil = 0;
 unsigned long alarmStartTime = 0;
-
-int selectedTimeZoneIndex = 0;
 
 const unsigned long SNOOZE_DURATION = 5 * 60 * 1000; // 5 min
 #define BUZZER_PIN     10
@@ -59,7 +48,7 @@ void checkAndTriggerAlarm(const struct tm& now) {
   static int  lastCheckedMinute       = -1;
   static bool alarmTriggeredThisMinute = false;
 
-  if (!alarmEnabled) return;
+  if (!alarmEnabled || alarmEditing) return; // Safeguard: don't trigger if disabled or being edited
 
   struct tm nowCopy = now;
   time_t epoch = mktime(&nowCopy);
@@ -91,14 +80,13 @@ void displayAlarmSettings() {
   display.display();
 }
 
-// — Show clock with timezone —
+// — Show clock (RTC time, no timezone conversion) —
 void showClockPage() {
   static unsigned long lastUpdateTime = 0;
   static char cachedTimeBuf[16] = "";
   static char cachedDateBuf[16] = "";
-  const unsigned long CLOCK_UPDATE_INTERVAL = 500;  // Update clock display every 500ms, not every frame
+  const unsigned long CLOCK_UPDATE_INTERVAL = 500;  // Update clock display every 500ms
 
-  const TimeZone& tz = timeZones[selectedTimeZoneIndex];
   struct tm now;
 
   // ✅ Use fallback-aware time fetch
@@ -109,13 +97,6 @@ void showClockPage() {
     return;
   }
 
-  int offsetH = (int)tz.offsetHours;
-  int offsetM = (tz.offsetHours - offsetH) * 60;
-
-  now.tm_hour += offsetH;
-  now.tm_min  += offsetM;
-  mktime(&now);
-
   // Only update display cache every 500ms (saves CPU from constant text rendering)
   if (millis() - lastUpdateTime >= CLOCK_UPDATE_INTERVAL) {
     lastUpdateTime = millis();
@@ -125,18 +106,16 @@ void showClockPage() {
              "%02d/%02d/%04d", now.tm_mday, now.tm_mon+1, now.tm_year+1900);
   }
 
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.print(tz.name);
-  
+  // Display time centered
   display.setTextSize(2);
   int16_t x, y;
   uint16_t w, h;
   display.getTextBounds(cachedTimeBuf, 0, 0, &x, &y, &w, &h);
-  display.setCursor((128 - w)/2, 25);
+  display.setCursor((128 - w)/2, 20);
   display.print(cachedTimeBuf);
   display.drawLine(0, 25 + h + 2, 127, 25 + h + 2, WHITE);
 
+  // Display date
   display.setTextSize(1);
   display.getTextBounds(cachedDateBuf, 0, 0, &x, &y, &w, &h);
   display.setCursor((128 - w)/2, 25 + h + 15);
@@ -147,7 +126,7 @@ void showClockPage() {
 void showAlarmStatus(const InputState& input) {
   static bool lastswPressed = false;
   static unsigned long lastAlarmToggleTime = 0;
-  const unsigned long ALARM_TOGGLE_DEBOUNCE = 300; // ms
+  const unsigned long ALARM_TOGGLE_DEBOUNCE = 100; // ms (was 300, reduced for responsiveness)
   
   // Non-blocking toggle with debounce
   if (input.swPressed && !lastswPressed && (millis() - lastAlarmToggleTime) >= ALARM_TOGGLE_DEBOUNCE) {
@@ -161,16 +140,6 @@ void showAlarmStatus(const InputState& input) {
            alarmEnabled ? "ON" : "OFF", alarmHour, alarmMinute);
   display.setCursor(26, 0);
   display.print(alarmBuf);
-}
-
-// — Timezone cycling —
-void changeTimeZone() {
-  selectedTimeZoneIndex = (selectedTimeZoneIndex + 1) % tzCount;
-}
-
-// — Optional manual set — 
-void setTimeZoneIndex(int idx) {
-  if (idx >= 0 && idx < tzCount) selectedTimeZoneIndex = idx;
 }
 
 // — Stopwatch screen —
