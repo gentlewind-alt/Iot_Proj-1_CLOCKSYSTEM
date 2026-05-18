@@ -1,7 +1,5 @@
 #include "interface.h"
 #include <LittleFS.h>
-#include "esp_wpa2.h"
-#include <WiFi.h>
 #include <RTClib.h>   // ✅ DS1307 RTC
 #include <Wire.h>
 #include <Adafruit_NeoPixel.h>
@@ -20,20 +18,14 @@
 
 // Alarm sound state
 extern bool inIdleAnimation;
-extern bool shaking;
-extern int selectedTimeZoneIndex;
 extern unsigned long alarmStartTime;
 extern volatile bool alarmBeeping;
 
 bool idleBlockedForAlarm = false;
-bool ntpSyncedOnce = false;
-bool wifiInitialized = false;  // Track if WiFi has been initialized
 
 const int alarmChordCount = 4;
 const float* alarmChords[] = {Cmaj7, G, Am7, Fmaj7};
 const int alarmChordLens[] = {4, 3, 4, 4};
-
-const unsigned long ntpSyncInterval = 6UL * 60UL * 60UL * 1000UL; // 6 hours
 
 // === Global Display and RTC Objects ===
 Adafruit_SSD1306 display(128, 64, &Wire);
@@ -54,14 +46,6 @@ MotionDetector* motionDetector = nullptr;      // PIR motion detector
 // === NEW SENSOR WIDGETS (Phase 2) ===
 DistanceWidget* distanceWidget = nullptr;      // Distance display
 AngleWidget* angleWidget = nullptr;            // Angle/level display
-
-// === WiFi Credentials ===
-const char* personalSSID     = "Airtel_Nanni";
-const char* personalPassword = "Samarth#2006";
-
-const char* instSSID     = "KIIT-WIFI-NET.";
-const char* instUsername = "2206290"; 
-const char* instPassword = "qT7bqcDx";
 
 // === Function Prototypes ===
 void displayText(int x, int y, const std::string &text) {
@@ -95,52 +79,8 @@ void initRTC() {
   }
 }
 
-// === Sync ESP RTC & DS1307 with NTP ===
-bool syncRTCWithNTP() {
-  // IST = UTC+5:30 (19800 seconds)
-  const long utcOffsetSec = 5 * 3600 + 30 * 60;
-  const int daylightOffsetSec = 0;
-  configTime(utcOffsetSec, daylightOffsetSec, "pool.ntp.org");
-
-  struct tm timeinfo;
-  if (getLocalTime(&timeinfo, 5000)) {
-    Serial.printf("✅ NTP Sync Success (IST): %04d-%02d-%02d %02d:%02d:%02d\n",
-                  timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday,
-                  timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-
-    // Save to DS1307 for persistence (store as IST)
-    extRTC.adjust(DateTime(
-      timeinfo.tm_year + 1900,
-      timeinfo.tm_mon + 1,
-      timeinfo.tm_mday,
-      timeinfo.tm_hour,
-      timeinfo.tm_min,
-      timeinfo.tm_sec
-    ));
-
-    ntpSyncedOnce = true;
-    lastNTPSync = millis();
-    Serial.println("💾 Time saved to DS1307 RTC (IST)");
-    // Power down Wi‑Fi after successful sync
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);
-    return true;
-  } else {
-    Serial.println("❌ NTP sync failed – will use DS1307 fallback");
-    // Ensure Wi‑Fi is turned off even on failure
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);
-    return false;
-  }
-}
-
-// === Get Time from RTC (WiFi/NTP disabled) ===
+// === Get Time from RTC ===
 bool getTimeWithFallback(struct tm &timeinfo) {
-  // WiFi disabled to save RAM - use DS1307 RTC only
-  // if (WiFi.status() == WL_CONNECTED && getLocalTime(&timeinfo, 1000)) {
-  //   return true;
-  // }
-
   // Use DS1307 RTC
   DateTime now = extRTC.now();
 
@@ -161,127 +101,11 @@ bool getTimeWithFallback(struct tm &timeinfo) {
   return true;
 }
 
-// === WiFi Connection Helpers (DISABLED - WiFi removed) ===
-// These are stubbed since WiFi.h is no longer included
-// Uncomment if you re-enable WiFi by:
-// 1. Adding #include <WiFi.h> back to interface.h
-// 2. Using a board with more RAM (ESP32, not ESP32-C3)
-
-bool connectPersonalWiFi() {
-  Serial.printf("🌐 Connecting to Personal WiFi: %s\n", personalSSID);
-  WiFi.begin(personalSSID, personalPassword);
-  
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-    delay(500);
-    Serial.print(".");
-    attempts++;
-  }
-  
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\n✅ Connected to Personal WiFi");
-    Serial.print("📡 IP Address: ");
-    Serial.println(WiFi.localIP());
-    return true;
-  } else {
-    Serial.println("\n❌ Failed to connect to Personal WiFi");
-    return false;
-  }
-}
-
-bool connectInstitutionWiFi() {
-  Serial.printf("🌐 Connecting to Institution WiFi: %s\n", instSSID);
-  
-  // Configure WPA2 Enterprise
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_STA);
-  esp_wifi_sta_wpa2_ent_set_identity((uint8_t *)instUsername, strlen(instUsername));
-  esp_wifi_sta_wpa2_ent_set_username((uint8_t *)instUsername, strlen(instUsername));
-  esp_wifi_sta_wpa2_ent_set_password((uint8_t *)instPassword, strlen(instPassword));
-  esp_wifi_sta_wpa2_ent_enable();
-  
-  WiFi.begin(instSSID);
-  
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 30) {
-    delay(500);
-    Serial.print(".");
-    attempts++;
-  }
-  
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\n✅ Connected to Institution WiFi");
-    Serial.print("📡 IP Address: ");
-    Serial.println(WiFi.localIP());
-    return true;
-  } else {
-    Serial.println("\n❌ Failed to connect to Institution WiFi");
-    return false;
-  }
-}
-
-// === RTC Sync (no NTP available without WiFi) ===
-// void syncRTCWithNTP() {
-//   // NTP sync disabled - WiFi not available
-// }
-
-// SPIFFS initialization moved to filesystem.cpp (initFilesystem function)
-
-// Old SPIFFS helper removed - use filesystem.cpp functions instead
-
-// File I/O helpers removed - use filesystem.cpp functions instead
-
-// const char* bootAnimPath = "/dasai2.pbin";
-
-// // Read BINPACK header
-// static bool readPackedHeader(File &f, uint16_t &w, uint16_t &h, uint32_t &count) {
-//     char magic[8];
-//     if (f.readBytes(magic, 8) != 8) return false;
-//     if (memcmp(magic, "BINPACK\0", 8) != 0) return false;
-//     if (f.readBytes((char*)&w, 2) != 2) return false;
-//     if (f.readBytes((char*)&h, 2) != 2) return false;
-//     if (f.readBytes((char*)&count, 4) != 4) return false;
-//     return true;
-// }
-
-// Play boot animation from SPIFFS
-// void playBootAnimation() {
-//     if (!SPIFFS.exists(bootAnimPath)) {
-//         Serial.printf("❌ Boot animation missing: %s\n", bootAnimPath);
-//         return;
-//     }
-
-//     File f = SPIFFS.open(bootAnimPath, "r");
-//     if (!f) {
-//         Serial.printf("❌ Failed to open: %s\n", bootAnimPath);
-//         return;
-//     }
-
-//     uint16_t w=0, h=0; uint32_t count=0;
-//     if (!readPackedHeader(f, w, h, count)) {
-//         Serial.printf("❌ Invalid packed animation: %s\n", bootAnimPath);
-//         f.close();
-//         return;
-//     }
-
-//     const size_t bytesPerFrame = (w * h)/8;
-//     static uint8_t frame[FRAME_SIZE];
-//     for(uint32_t i=0; i<count; i++){
-//         size_t n = f.read(frame, bytesPerFrame);
-//         if(n != bytesPerFrame) break;
-//         display.clearDisplay();
-//         display.drawBitmap(0,0,frame,SCREEN_WIDTH,SCREEN_HEIGHT,1);
-//         display.display();
-//         delay(80);
-//     }
-//     f.close();
-// }
-
 // Play boot animation from SPIFFS/LittleFS
 void playBootAnimation() {
   // Try to play 0.bin if it exists
-  if (globalAnimPlayer && playAnimationBlocking("/0.bin", 40, false)) {
-    Serial.println("✅ Boot animation played from /0.bin");
+  if (globalAnimPlayer && playAnimationBlocking("/dasai.bin", 40, false)) {
+    Serial.println("✅ Boot animation played from /dasai.bin");
   } else {
     // Fallback: show startup message
     display.clearDisplay();
@@ -322,27 +146,6 @@ void setup() {
     // Prepare motion sensor for idle detection
     setupMotionSensor();
 
-    // 🚨 WiFi DISABLED - BSS too large for ESP32-C3 (320 KB RAM vs 935 KB WiFi stack)
-    // Using only DS1307 RTC for time keeping
-    // If you need WiFi: upgrade to ESP32 with more RAM or use external PSRAM
-    
-    // WiFi & NTP Sync (Lightweight Option B)
-    bool wifiConnected = false;
-    if (connectPersonalWiFi()) {
-        wifiConnected = true;
-    } else if (connectInstitutionWiFi()) {
-        wifiConnected = true;
-    }
-    
-    if (wifiConnected) {
-        syncRTCWithNTP();
-        if (!ntpSyncedOnce) {
-            Serial.println("⚠️ NTP sync failed on startup, DS1307 will be used for time");
-        }
-    } else {
-        Serial.println("📴 No WiFi available - using DS1307 RTC for time");
-    }
-
     // Verify we have valid time from somewhere
     struct tm testTime;
     if (!getTimeWithFallback(testTime)) {
@@ -356,11 +159,9 @@ void setup() {
         delay(2000);
     }
 
-    // Boot animation (.h file system)
+    // Boot animation (.bin file system)
     playBootAnimation();
     Serial.println("✅ Boot sequence complete");
-
-    // fetchWeather();  // ⚠️ DISABLED: Requires WiFi/HTTPClient
 
     Serial.println("Buzzer ON");
     tone(BUZZER_PIN,1000);
@@ -372,6 +173,7 @@ void setup() {
         Serial.println("❌ MPU6050 not found");
         while(1) delay(10);
     }
+
 
     // === Initialize Sensors (Phase 2) ===
     // Distance Sensor (HC-SR04)
@@ -575,6 +377,7 @@ void loop() {
             alarmBeeping = false;
             alarmChordIndex = 0;
             alarmEnabled = !alarmEnabled;
+            alarmOffAnimation();
         }
         // Stop alarm if motion detected
         else if (motionDetector && motionDetector->isMotionDetected()) {

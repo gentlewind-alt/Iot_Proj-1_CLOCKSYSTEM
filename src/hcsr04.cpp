@@ -16,66 +16,66 @@ void DistanceSensor::begin() {
 
 uint16_t DistanceSensor::getRawDistance() {
     digitalWrite(trigPin, LOW);
-    delayMicroseconds(5); // Increased for stability
+    delayMicroseconds(5);
     digitalWrite(trigPin, HIGH);
     delayMicroseconds(10);
     digitalWrite(trigPin, LOW);
     
-    // Measure pulse duration (timeout after 20ms = ~340cm)
-    // 10ms was a bit tight for many environments
-    long duration = pulseIn(echoPin, HIGH, 20000);
+    // Measure pulse duration (timeout after 25ms = ~430cm)
+    // On ESP32-C3, pulseIn is generally reliable with these timeouts
+    long duration = pulseIn(echoPin, HIGH, 25000);
     
-    if (duration == 0 || duration > 25000) return 0;  // Out of range or timeout
+    if (duration <= 0) return 999;  // Timeout or error (return large value)
     
     // Distance = time * speed_of_sound / 2
     // speed_of_sound = 343 m/s = 0.0343 cm/μs
-    // Use floating point for precision then cast
     uint16_t distance = (uint16_t)((duration * 0.0343) / 2.0);
     
-    return distance;
+    return (distance == 0) ? 999 : distance;
 }
 
 uint16_t DistanceSensor::getDistance() {
-    // Throttle measurements slightly but keep it fast enough for gestures
-    if (millis() - lastMeasureTime < 50) { 
+    // Throttle measurements to 60ms (standard HC-SR04 cycle)
+    if (millis() - lastMeasureTime < 60) { 
         return cachedDistance;
     }
     lastMeasureTime = millis();
     
-    // Get 3 quick samples for a median filter (excellent for rejecting spikes)
+    // Get 3 quick samples for a median filter
     uint16_t samples[3];
     int validSamples = 0;
     
     for (int i = 0; i < 3; i++) {
         uint16_t r = getRawDistance();
-        if (r > 0 && r < 400) { // Reject 0 and extreme outliers
-            samples[validSamples++] = r;
-        }
-        if (i < 2) delayMicroseconds(200); // Small gap between pulses
+        // Accept all readings, but mark timeouts as 999
+        samples[i] = r;
+        if (r < 400) validSamples++;
+        
+        if (i < 2) delay(10); // 10ms gap between pulses to avoid ghost echoes
     }
     
-    if (validSamples == 0) return cachedDistance; // Keep old value if all failed
-
     uint16_t result;
-    if (validSamples == 1) {
-        result = samples[0];
-    } else if (validSamples == 2) {
-        result = (samples[0] + samples[1]) / 2;
+    // Median of 3 (robust against single-sample noise)
+    if ((samples[0] <= samples[1]) && (samples[0] <= samples[2])) {
+        result = (samples[1] <= samples[2]) ? samples[1] : samples[2];
+    } else if ((samples[1] <= samples[0]) && (samples[1] <= samples[2])) {
+        result = (samples[0] <= samples[2]) ? samples[0] : samples[2];
     } else {
-        // Median of 3
-        if ((samples[0] <= samples[1]) && (samples[0] <= samples[2])) {
-            result = (samples[1] <= samples[2]) ? samples[1] : samples[2];
-        } else if ((samples[1] <= samples[0]) && (samples[1] <= samples[2])) {
-            result = (samples[0] <= samples[2]) ? samples[0] : samples[2];
-        } else {
-            result = (samples[0] <= samples[1]) ? samples[0] : samples[1];
-        }
+        result = (samples[0] <= samples[1]) ? samples[0] : samples[1];
     }
 
-    // Apply a light low-pass filter (Exponential Moving Average) 
-    // to the median result for ultra-smoothness
-    // alpha = 0.7 (70% new reading, 30% old)
-    cachedDistance = (uint16_t)(result * 0.7 + cachedDistance * 0.3);
+    // Apply low-pass filter (Exponential Moving Average)
+    // If result is 999 (out of range), cachedDistance will slowly move out of range
+    if (result == 999) {
+        // Fast drift to out-of-range state to avoid "stuck" feel
+        cachedDistance = (cachedDistance > 400) ? 999 : (uint16_t)(cachedDistance + 20);
+    } else {
+        // Standard smoothing for valid readings
+        cachedDistance = (uint16_t)(result * 0.6 + cachedDistance * 0.4);
+    }
+    
+    // Final clamp for safety
+    if (cachedDistance > 1000) cachedDistance = 999;
     
     return cachedDistance;
 }

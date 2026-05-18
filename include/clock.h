@@ -33,6 +33,7 @@ bool syncRTCWithNTP();
 void playChord(const float* chord, int len);
 void checkAndTriggerAlarm(const tm& now);
 void showClockPage();
+void alarmOffAnimation(); // New function for alarm off animation
  // Dummy function to avoid undefined identifier error
 
 #endif

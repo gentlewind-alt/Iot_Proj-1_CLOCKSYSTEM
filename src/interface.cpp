@@ -31,10 +31,6 @@ static std::string formatTime(int h, int m) {
   char b[6]; snprintf(b, sizeof(b), "%02d:%02d", h, m);
   return std::string(b);
 }
-static std::string formatTZ(int off) {
-  char b[8]; snprintf(b, sizeof(b), "UTC%+d", off);
-  return std::string(b);
-}
 
 // === Helpers ===
 void toggleAlarm() { alarmEnabled = !alarmEnabled; }
@@ -248,11 +244,12 @@ void interfaceLoop(const InputState& input) {
             if (millis() - lastActionTime > 100) {
                 if (!editingAlarm) {
                     // Not editing: toggle alarm ON/OFF with RST, enter hour set mode with SW
-                    if (input.rstPressed) {
-                        alarmEnabled = !alarmEnabled;
-                        lastActionTime = millis();
-                    }
-                    else if (input.swPressed) {
+                    // if (input.rstPressed) {
+                    //     alarmEnabled = !alarmEnabled;
+                    //     lastActionTime = millis();
+                    // }
+                    // else
+                     if (input.swPressed) {
                         editingAlarm = true;
                         editingMinute = false;
                         alarmEditing = true;

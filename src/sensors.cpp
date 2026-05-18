@@ -14,26 +14,16 @@ extern Adafruit_SSD1306 display;
 extern Adafruit_MPU6050 mpu;
 
 // Idle mode variables
-const unsigned long idleTimeout = 120 * 1000; // 20s
-float smoothX = 0, smoothY = 0;
-bool shaking = false;
-bool pirState = false;
+const unsigned long idleTimeout = 120 * 1000; // 120s
 unsigned long lastMotionTime = 0;
 bool inIdleAnimation = false;
 bool isIdlePlaying = false; 
-unsigned long lastInteractionTime = 0;
-
-// PIR + motion constants
-const float motionThreshold = 2.5;
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 
-// Animation loaders replaced by animation.cpp .bin system
-
 void playRandomIdleAnimation() {
     if (globalAnimPlayer) {
-        // Search from root / so it finds .bin files even if not in an /idle folder
         playRandomAnimation("/", 80, false);
     }
 }
@@ -69,8 +59,6 @@ void checkForUserActivity() {
   bool buttonUsed = digitalRead(pinSW) == LOW || digitalRead(pinRST) == LOW || rotaryUsed;
 
   if (alarmBeeping && (pirVal || (distance > 0 && distance < 20))) {
-    // If alarm is beeping and we detect close motion/presence, snooze or stop
-    // (Actual stop logic is in main.cpp, but we update lastMotionTime here)
     lastMotionTime = millis();
   }
 
@@ -95,4 +83,3 @@ void checkForUserActivity() {
     isIdlePlaying = false;
   }
 }
-

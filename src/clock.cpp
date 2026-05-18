@@ -1,6 +1,7 @@
 #include "clock.h"
 #include "interface.h"
 #include <time.h>
+#include "animation.h"
 
 // We will use getTimeWithFallback() from main.cpp
 extern bool getTimeWithFallback(struct tm &timeinfo);
@@ -140,6 +141,22 @@ void showAlarmStatus(const InputState& input) {
            alarmEnabled ? "ON" : "OFF", alarmHour, alarmMinute);
   display.setCursor(26, 0);
   display.print(alarmBuf);
+}
+
+void alarmOffAnimation() {
+  // Try to play 0.bin if it exists
+  if (globalAnimPlayer && playAnimationBlocking("/dasai.bin", 40, false)) {
+    Serial.println("✅ Boot animation played from /dasai.bin");
+  } else {
+    // Fallback: show startup message
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(20, 20);
+    display.println("Clock Booting...");
+    display.display();
+    delay(1000);
+  }
 }
 
 // — Stopwatch screen —
